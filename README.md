@@ -6,7 +6,7 @@ PromptScan scans a repository, finds every LLM API call, and reports what each o
 
 It makes no claims it can't prove. Every number comes from static analysis of your code. **"This prompt is 48 tokens and appears in three files"** is a fact. **"This cheaper model would work just as well"** is not — and PromptScan doesn't say it.
 
-> **Status:** pre-release (`v0.5.2`). **Python, TypeScript, and JavaScript** source; OpenAI, Anthropic, and LangChain. Roadmap phases v0.1–v0.4 are implemented and validated, and v0.5 (multi-language, LangChain, dead prompts) has landed; see [Roadmap](#roadmap). Not yet published to npm — see [Local usage](#usage).
+> **Status:** pre-release (`v0.6.0`). **Python, TypeScript, and JavaScript** source; OpenAI, Anthropic, and LangChain. Roadmap phases v0.1–v0.4 are implemented and validated, v0.5 (multi-language, LangChain, dead prompts) and the first v1.0 analysis feature (context bloat) have landed; see [Roadmap](#roadmap). Not yet published to npm — see [Local usage](#usage).
 
 ---
 
@@ -76,6 +76,14 @@ Multiplies tokens by a **bundled, versioned pricing table** (OpenAI + Anthropic)
 
 A prompt-shaped string constant with **no reachable reference** anywhere in the scanned code. Conservative by design — flagged only when the name is never referenced in any file (imports and property accesses count), never appears inside a string literal (guards `__all__`, `getattr`, dynamic access), and the string is a module-level, fully-static, ≥6-word literal. Labeled a heuristic and reported separately: it can't see runtime reflection, and a library's public prompt consumed by external code will look unused.
 
+### 7. Context-bloat flags (heuristics)
+
+Three lenses on oversized context, all labeled as heuristics:
+
+- **Oversized prompts** — a single resolved prompt above a token threshold (default 2,000).
+- **Many-message / few-shot** — a prompt with many message parts (default ≥6), a possible example pile-up.
+- **Repeated boilerplate** — a prompt *block* (e.g. a system message) repeated verbatim across ≥3 call sites. This is the part-level analogue of duplicate detection: it catches a shared system prompt across prompts whose user turns differ, which whole-prompt dedup misses — an extract-or-cache candidate.
+
 ---
 
 ## Usage
@@ -115,7 +123,7 @@ sites:
 ### Example output
 
 ```
-PromptScan v0.5.2  (phase: cost)
+PromptScan v0.6.0  (phase: cost)
 
   Scanned:  ./src
   Files:    4 source files
@@ -249,7 +257,8 @@ Full methodology and the Twilio tradeoff writeup: [VALIDATION.md](VALIDATION.md)
 | **v0.3** | Versioned pricing table, per-call + monthly cost | ✅ done |
 | **v0.4** | `diff` command, GitHub Action, PR comments, fail-on-increase | ✅ done |
 | **v0.5** | TypeScript/JavaScript support, LangChain patterns, dead-prompt detection | ✅ done |
-| **v1.0** | Context-bloat heuristics, config file, stable JSON schema | planned |
+| **v1.0** | Context-bloat heuristics | ✅ done |
+| — | config file, stable JSON schema | planned |
 
 ---
 

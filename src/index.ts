@@ -13,6 +13,7 @@ import { detectCallSites } from './detect/callsites.js';
 import { detectTsCallSites } from './lang/typescript.js';
 import { findDuplicates, type DuplicateOptions } from './analyze/duplicates.js';
 import { collectDeadPromptFile, aggregateDeadPrompts, type DeadPromptFile } from './analyze/deadprompts.js';
+import { analyzeBloat, type BloatOptions } from './analyze/bloat.js';
 import { projectMonthly, type VolumeConfig } from './pricing/cost.js';
 import { PRICING_VERSION, PRICING_AS_OF } from './pricing/table.js';
 import { VERSION } from './version.js';
@@ -20,7 +21,7 @@ import type { CallSite, FileParseSummary, ScanReport, ScanStats } from './report
 
 export type { ScanReport, FileParseSummary, ScanStats, CallSite } from './report/types.js';
 
-export interface ScanOptions extends DiscoveryOptions, DuplicateOptions {
+export interface ScanOptions extends DiscoveryOptions, DuplicateOptions, BloatOptions {
   /** Call-volume estimate; when present, the report includes a monthly projection. */
   volume?: VolumeConfig;
 }
@@ -64,6 +65,7 @@ export async function scan(target: string, opts: ScanOptions = {}): Promise<Scan
     inputCostUsd: 0,
     unpricedCallSites: 0,
     deadPrompts: 0,
+    bloatFlags: 0,
   };
   const deadData: DeadPromptFile[] = [];
 
@@ -126,6 +128,9 @@ export async function scan(target: string, opts: ScanOptions = {}): Promise<Scan
   const deadPrompts = aggregateDeadPrompts(deadData);
   stats.deadPrompts = deadPrompts.length;
 
+  const bloat = analyzeBloat(callSites, opts);
+  stats.bloatFlags = bloat.oversized.length + bloat.fewShot.length + bloat.boilerplate.length;
+
   const projection = opts.volume ? projectMonthly(callSites, opts.volume) : null;
 
   return {
@@ -134,6 +139,7 @@ export async function scan(target: string, opts: ScanOptions = {}): Promise<Scan
     callSites,
     duplicates,
     deadPrompts,
+    bloat,
     projection,
     stats,
     meta: {
