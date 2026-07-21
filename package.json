@@ -1,6 +1,6 @@
 {
   "name": "promptscan",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "Static analysis for LLM call sites. Find what your prompts cost before you ship them.",
   "type": "module",
   "bin": {
