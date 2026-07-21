@@ -21,7 +21,7 @@ jobs:
         with:
           node-version: 20
 
-      - uses: promptscan/action@v1 # or your fork, until published
+      - uses: joandino/promptscan@v1 # tag a v1 release to use this
         with:
           path: ./src
           fail-on-increase: '5' # fail the check if input tokens grow > 5%

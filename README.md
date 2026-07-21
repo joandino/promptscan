@@ -222,7 +222,7 @@ increase. A ready-to-copy workflow is in [`examples/github-workflow.yml`](exampl
 ```yaml
 - uses: actions/checkout@v4
   with: { fetch-depth: 0 } # both refs must be present
-- uses: promptscan/action@v1
+- uses: joandino/promptscan@v1
   with:
     path: ./src
     fail-on-increase: '5'
