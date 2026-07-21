@@ -1,0 +1,47 @@
+{
+  "name": "promptscan",
+  "version": "0.1.0",
+  "description": "Static analysis for LLM call sites. Find what your prompts cost before you ship them.",
+  "type": "module",
+  "bin": {
+    "promptscan": "dist/cli.js"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "vendor"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/cli.ts",
+    "start": "node dist/cli.js",
+    "test": "node --import tsx --test test/*.test.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "keywords": [
+    "llm",
+    "prompt",
+    "static-analysis",
+    "openai",
+    "anthropic",
+    "tokens",
+    "cost",
+    "cli"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "commander": "^12.1.0",
+    "globby": "^14.0.2",
+    "tree-sitter-wasms": "^0.1.13",
+    "web-tree-sitter": "^0.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}
