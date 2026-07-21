@@ -3,12 +3,17 @@ import { discoverPythonFiles, type DiscoveryOptions } from './discovery/walk.js'
 import { initParser, createPythonParser, parseFile, getPythonLanguage } from './parse/parser.js';
 import { detectCallSites } from './detect/callsites.js';
 import { findDuplicates, type DuplicateOptions } from './analyze/duplicates.js';
+import { projectMonthly, type VolumeConfig } from './pricing/cost.js';
+import { PRICING_VERSION, PRICING_AS_OF } from './pricing/table.js';
 import { VERSION } from './version.js';
 import type { CallSite, FileParseSummary, ScanReport, ScanStats } from './report/types.js';
 
 export type { ScanReport, FileParseSummary, ScanStats, CallSite } from './report/types.js';
 
-export interface ScanOptions extends DiscoveryOptions, DuplicateOptions {}
+export interface ScanOptions extends DiscoveryOptions, DuplicateOptions {
+  /** Call-volume estimate; when present, the report includes a monthly projection. */
+  volume?: VolumeConfig;
+}
 
 /**
  * v0.1 scan: discover Python files, parse each, and detect OpenAI/Anthropic
@@ -39,6 +44,8 @@ export async function scan(target: string, opts: ScanOptions = {}): Promise<Scan
     tokensApproximate: false,
     exactDuplicateGroups: 0,
     nearDuplicatePairs: 0,
+    inputCostUsd: 0,
+    unpricedCallSites: 0,
   };
 
   for (const absPath of files) {
@@ -67,10 +74,12 @@ export async function scan(target: string, opts: ScanOptions = {}): Promise<Scan
       if (site.prompt.status === 'resolved') stats.promptsResolved++;
       else if (site.prompt.status === 'partial') stats.promptsPartial++;
       else stats.promptsUnresolved++;
-      // Count tokens only where content was countable (resolved or partial).
+      // Count tokens/cost only where content was countable (resolved or partial).
       if (site.prompt.status !== 'unresolved') {
         stats.inputTokens += site.tokens.inputTokens;
         if (site.tokens.approximate) stats.tokensApproximate = true;
+        if (site.cost.inputCostUsd !== null) stats.inputCostUsd += site.cost.inputCostUsd;
+        else stats.unpricedCallSites++;
       }
     }
 
@@ -85,12 +94,20 @@ export async function scan(target: string, opts: ScanOptions = {}): Promise<Scan
   stats.exactDuplicateGroups = duplicates.exact.length;
   stats.nearDuplicatePairs = duplicates.near.length;
 
+  const projection = opts.volume ? projectMonthly(callSites, opts.volume) : null;
+
   return {
     root,
     files: summaries,
     callSites,
     duplicates,
+    projection,
     stats,
-    meta: { version: VERSION, phase: 'duplicates' },
+    meta: {
+      version: VERSION,
+      phase: 'cost',
+      pricingVersion: PRICING_VERSION,
+      pricingAsOf: PRICING_AS_OF,
+    },
   };
 }

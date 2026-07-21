@@ -39,7 +39,8 @@
     "globby": "^14.0.2",
     "js-tiktoken": "^1.0.21",
     "tree-sitter-wasms": "^0.1.13",
-    "web-tree-sitter": "^0.25.0"
+    "web-tree-sitter": "^0.25.0",
+    "yaml": "^2.9.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

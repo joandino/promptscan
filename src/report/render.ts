@@ -1,5 +1,5 @@
 import type { ScanReport } from './types.js';
-import { renderCallSiteTable } from './table.js';
+import { renderCallSiteTable, formatUsd } from './table.js';
 
 /**
  * Render the M1 discovery summary as a human-readable terminal block.
@@ -48,7 +48,30 @@ export function renderScanSummary(report: ScanReport): string {
   lines.push(renderCallSites(report));
   const dup = renderDuplicates(report);
   if (dup) lines.push('', dup);
+  const proj = renderProjection(report);
+  if (proj) lines.push('', proj);
   return lines.join('\n') + '\n';
+}
+
+function renderProjection(report: ScanReport): string {
+  const p = report.projection;
+  if (!p || p.sites.length === 0) return '';
+
+  const lines: string[] = [];
+  const unpriced = p.unpriced > 0 ? ` (${p.unpriced} unpriced, excluded)` : '';
+  lines.push(
+    `  Monthly projection: ${formatUsd(p.monthlyInputCostUsd)}/mo input cost, ` +
+      `${p.monthlyInputTokens.toLocaleString('en-US')} input tok/mo${unpriced}`,
+  );
+  const top = p.sites.slice(0, 5);
+  for (const s of top) {
+    const cost = s.monthlyInputCostUsd === null ? 'unpriced' : `${formatUsd(s.monthlyInputCostUsd)}/mo`;
+    lines.push(`      ${s.file}:${s.line} — ${s.callsPerMonth.toLocaleString('en-US')} calls/mo → ${cost}`);
+  }
+  if (p.sites.length > top.length) {
+    lines.push(`      … and ${p.sites.length - top.length} more call sites`);
+  }
+  return lines.join('\n');
 }
 
 function loc(ref: { file: string; line: number }): string {
@@ -124,6 +147,11 @@ function renderCallSites(report: ScanReport): string {
   lines.push(
     `  Input tok:  ${approx}${stats.inputTokens.toLocaleString('en-US')} ` +
       `(estimate, input only — output tokens are not statically knowable)`,
+  );
+  const unpriced = stats.unpricedCallSites > 0 ? `, ${stats.unpricedCallSites} unpriced` : '';
+  lines.push(
+    `  Input cost: ${approx}${formatUsd(stats.inputCostUsd)}/scan ` +
+      `(estimate, input only${unpriced}; pricing ${report.meta.pricingVersion}, as of ${report.meta.pricingAsOf})`,
   );
   lines.push('');
   lines.push(
