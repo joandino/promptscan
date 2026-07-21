@@ -46,7 +46,54 @@ export function renderScanSummary(report: ScanReport): string {
 
   lines.push('');
   lines.push(renderCallSites(report));
+  const dup = renderDuplicates(report);
+  if (dup) lines.push('', dup);
   return lines.join('\n') + '\n';
+}
+
+function loc(ref: { file: string; line: number }): string {
+  return `${ref.file}:${ref.line}`;
+}
+
+function preview(text: string, max = 56): string {
+  const one = text.replace(/\s+/g, ' ').trim();
+  return one.length > max ? one.slice(0, max - 1) + '…' : one;
+}
+
+function renderDuplicates(report: ScanReport): string {
+  const { exact, near, threshold, nearNote } = report.duplicates;
+  if (exact.length === 0 && near.length === 0 && !nearNote) return '';
+
+  const lines: string[] = [];
+  const wasted = exact.reduce((n, g) => n + g.tokens * (g.sites.length - 1), 0);
+  lines.push(
+    `  Duplicates: ${exact.length} exact group${exact.length === 1 ? '' : 's'}, ` +
+      `${near.length} near-dup pair${near.length === 1 ? '' : 's'} (≥${threshold})`,
+  );
+  if (wasted > 0) {
+    lines.push(`              ~${wasted.toLocaleString('en-US')} input tokens in repeated prompt copies`);
+  }
+
+  for (const g of exact) {
+    lines.push('');
+    lines.push(`  exact ×${g.sites.length} (${g.tokens} tok each): "${preview(g.text)}"`);
+    for (const s of g.sites) lines.push(`      ${loc(s)}`);
+  }
+
+  if (near.length > 0) {
+    lines.push('');
+    lines.push('  near-duplicates:');
+    for (const p of near) {
+      lines.push(`      ${p.similarity.toFixed(2)}  ${loc(p.a)}  ~  ${loc(p.b)}`);
+    }
+  }
+
+  if (nearNote) {
+    lines.push('');
+    lines.push(`  note: ${nearNote}`);
+  }
+
+  return lines.join('\n');
 }
 
 function renderCallSites(report: ScanReport): string {
