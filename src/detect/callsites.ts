@@ -2,7 +2,8 @@ import path from 'node:path';
 import type { Node, Tree, Language } from 'web-tree-sitter';
 import { getDetectionQueries } from '../parse/queries.js';
 import { buildModuleContext } from './providers.js';
-import { classify } from './patterns.js';
+import { classify, classifyLangChain, type ArgStyle } from './patterns.js';
+import type { Confidence, MatchBasis, Provider } from '../report/types.js';
 import { buildSymbolTable } from '../resolve/symbols.js';
 import { resolvePrompt } from '../resolve/resolver.js';
 import { estimateTokens } from '../tokens/tokenizer.js';
@@ -73,26 +74,49 @@ export function detectCallSites(
 
     const chain = fn.text;
     const receiver = baseIdentifier(fn);
-    const result = classify(chain, receiver, ctx);
-    if (!result) continue;
 
-    const { model, hint } = extractModel(node);
-    const prompt = resolvePrompt(node, result.argStyle, resolveCtx);
-    const tokens = estimateTokens(result.provider, model, prompt);
-    const cost = estimateCost(result.provider, model, tokens.inputTokens);
+    // Direct SDK call, else a LangChain .invoke/.stream on a bound model.
+    const direct = classify(chain, receiver, ctx);
+    const lc = direct ? null : classifyLangChain(chain, receiver, ctx);
+    if (!direct && !lc) continue;
+
+    let provider: Provider;
+    let method: string;
+    let argStyle: ArgStyle;
+    let confidence: Confidence;
+    let basis: MatchBasis;
+    let model: string | null;
+    let hint: string | null;
+
+    if (direct) {
+      ({ provider, method, argStyle, confidence, basis } = direct);
+      ({ model, hint } = extractModel(node));
+    } else {
+      provider = lc!.provider;
+      method = lc!.method;
+      argStyle = 'langchain';
+      confidence = 'high';
+      basis = 'binding';
+      model = lc!.model; // resolved at the LangChain constructor
+      hint = null;
+    }
+
+    const prompt = resolvePrompt(node, argStyle, resolveCtx);
+    const tokens = estimateTokens(provider, model, prompt);
+    const cost = estimateCost(provider, model, tokens.inputTokens);
     const pos = node.startPosition;
     sites.push({
       file: relPath,
       line: pos.row + 1,
       column: pos.column + 1,
-      provider: result.provider,
-      method: result.method,
+      provider,
+      method,
       model,
       modelResolved: model !== null,
       modelHint: hint,
       receiver,
-      confidence: result.confidence,
-      basis: result.basis,
+      confidence,
+      basis,
       prompt,
       tokens,
       cost,

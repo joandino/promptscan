@@ -6,7 +6,7 @@ PromptScan scans a repository, finds every LLM API call, and reports what each o
 
 It makes no claims it can't prove. Every number comes from static analysis of your code. **"This prompt is 48 tokens and appears in three files"** is a fact. **"This cheaper model would work just as well"** is not — and PromptScan doesn't say it.
 
-> **Status:** pre-release (`v0.5.0`). **Python, TypeScript, and JavaScript** source; OpenAI + Anthropic. Roadmap phases v0.1–v0.4 are implemented and validated, and v0.5 multi-language support has landed; see [Roadmap](#roadmap). Not yet published to npm — see [Local usage](#usage).
+> **Status:** pre-release (`v0.5.1`). **Python, TypeScript, and JavaScript** source; OpenAI, Anthropic, and LangChain. Roadmap phases v0.1–v0.4 are implemented and validated, and v0.5 multi-language + LangChain support has landed; see [Roadmap](#roadmap). Not yet published to npm — see [Local usage](#usage).
 
 ---
 
@@ -32,12 +32,15 @@ Point it at a directory and it runs a pipeline:
 
 Parses each file with tree-sitter and finds LLM invocations, in **Python, TypeScript, and JavaScript** (incl. JSX/TSX, ESM `import` and CommonJS `require`):
 
-| Provider | Methods detected |
+| Provider / framework | What's detected |
 |---|---|
 | OpenAI | `chat.completions.create` / `.parse` / `.stream`, `responses.create` / `.parse` / `.stream` |
 | Anthropic | `messages.create` / `.stream` |
+| LangChain | `ChatOpenAI` / `ChatAnthropic` / `AzureChatOpenAI` → `.invoke` / `.stream` / `.batch` (+ async) |
 
 Detection is corroborated by two independent signals beyond the method name — an SDK import (`import openai`, `import { Anthropic } from "@anthropic-ai/sdk"`, `require("openai")`) and client-variable binding (`client = openai.OpenAI()`, `new OpenAI()`). Long, self-identifying chains (`chat.completions.create`) report **high** confidence on shape alone; short, ambiguous chains (`messages.create` — which is *also Twilio's SMS API*) require an import (**medium**) or a binding (**high**), and are dropped otherwise. The table shows *why* each medium call site was included.
+
+For **LangChain**, the model + provider come from the constructor (`ChatOpenAI(model="gpt-4o")`), and the call site is `.invoke()`/`.stream()` on that model — or on a chain that ends in it (`chain = prompt | model`, `prompt.pipe(model)`). Because `.invoke` is generic, it's only flagged when the receiver is a bound model, never on shape. Prompts passed directly to `invoke(...)` (strings, `SystemMessage`/`HumanMessage` lists) resolve; prompts held in a `ChatPromptTemplate` are honestly reported unresolved.
 
 ### 2. Prompt resolution
 
@@ -219,7 +222,7 @@ Full methodology and the Twilio tradeoff writeup: [VALIDATION.md](VALIDATION.md)
 
 ## Known limitations
 
-- **Direct SDK calls only.** LangChain wrappers (`ChatOpenAI`, `.invoke`, `LLMChain`) and dead-prompt detection are the remaining v0.5 items, not yet implemented.
+- **Dead-prompt detection** (prompt constants with no reachable call site) is the remaining v0.5 item, not yet implemented.
 - **Provider SDK internals**: a call on an attribute receiver (`self._client.messages.create`) in a file that doesn't import the SDK by name isn't detected — confined to code living *inside* a provider package.
 - **Cross-module constants** (`from other import PROMPT`) and non-literal file paths report unresolved rather than guess.
 - **Pricing drifts.** The table is a single bundled file stamped with an as-of date; OpenAI prices are listed rates — verify before relying on them.
@@ -241,8 +244,8 @@ Full methodology and the Twilio tradeoff writeup: [VALIDATION.md](VALIDATION.md)
 | **v0.2** | Exact + near-duplicate detection, JSON output | ✅ done |
 | **v0.3** | Versioned pricing table, per-call + monthly cost | ✅ done |
 | **v0.4** | `diff` command, GitHub Action, PR comments, fail-on-increase | ✅ done |
-| **v0.5** | TypeScript/JavaScript support | ✅ done |
-| — | LangChain patterns, dead-prompt detection | planned |
+| **v0.5** | TypeScript/JavaScript support, LangChain patterns | ✅ done |
+| — | dead-prompt detection | planned |
 | **v1.0** | Context-bloat heuristics, config file, stable JSON schema | planned |
 
 ---

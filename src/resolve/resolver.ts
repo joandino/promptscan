@@ -8,8 +8,9 @@ import type {
   PromptOrigin,
   ResolvedPrompt,
 } from '../report/types.js';
-import { keywordArgValue, staticString } from './nodes.js';
+import { keywordArgValue, staticString, firstPositionalArg } from './nodes.js';
 import { detectFileLoadPath, readPromptFile } from './fileload.js';
+import { messageRole } from '../detect/context.js';
 import type { ArgStyle } from '../detect/patterns.js';
 
 export interface ResolveContext {
@@ -245,7 +246,44 @@ export function resolvePrompt(
       if (list) parts.push(...resolveMessagesArg(input, ctx, 'input'));
       else parts.push(scalarPart(input, ctx, 'input', null));
     }
+  } else if (argStyle === 'langchain') {
+    parts.push(...resolveLangChainInput(callNode, ctx));
   }
 
   return aggregate(parts);
+}
+
+/** Content of a LangChain message element: `HumanMessage("..")` / `("system", "..")`. */
+function resolveLangChainElement(el: Node, ctx: ResolveContext): PromptPart {
+  if (el.type === 'call') {
+    const ctorName = el.childForFieldName('function')?.text ?? '';
+    const role = messageRole(ctorName);
+    const content = keywordArgValue(el, 'content') ?? firstPositionalArg(el);
+    return { role, origin: 'input', value: content ? resolveExpr(content, ctx) : makeUnresolved(label(el), 'message without content', 'unknown') };
+  }
+  if (el.type === 'tuple') {
+    const items = el.namedChildren.filter((c): c is Node => !!c);
+    const role = items[0] ? staticString(items[0]) : null;
+    return { role, origin: 'input', value: items[1] ? resolveExpr(items[1], ctx) : makeUnresolved(label(el), 'empty message tuple', 'unknown') };
+  }
+  return { role: null, origin: 'input', value: makeUnresolved(label(el), 'unsupported message element', 'unknown') };
+}
+
+/** Resolve the first positional argument of a LangChain `.invoke(...)`. */
+function resolveLangChainInput(callNode: Node, ctx: ResolveContext): PromptPart[] {
+  const arg = firstPositionalArg(callNode);
+  if (!arg) return [{ role: null, origin: 'input', value: makeUnresolved('', 'no prompt argument', 'unknown') }];
+
+  const list = asListLiteral(arg, ctx);
+  if (list) {
+    const els = list.namedChildren.filter((c): c is Node => !!c);
+    return els.length > 0
+      ? els.map((el) => resolveLangChainElement(el, ctx))
+      : [{ role: null, origin: 'input', value: makeUnresolved('[]', 'empty message list', 'unknown') }];
+  }
+  if (arg.type === 'string' || arg.type === 'concatenated_string' || arg.type === 'identifier') {
+    return [{ role: null, origin: 'input', value: resolveExpr(arg, ctx) }];
+  }
+  // dict / template / chain input — the prompt is usually in a template.
+  return [{ role: null, origin: 'input', value: makeUnresolved(label(arg), 'LangChain input (prompt may be defined in a template)', 'unknown') }];
 }

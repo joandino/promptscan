@@ -4,8 +4,9 @@ import type { Confidence, MatchBasis } from '../report/types.js';
 /**
  * Argument shape of an LLM call, shared across a method family so that
  * create/parse/stream variants all resolve identically, and across languages.
+ * 'langchain' is the invoke(...) argument of a LangChain model/chain.
  */
-export type ArgStyle = 'chat' | 'messages' | 'responses';
+export type ArgStyle = 'chat' | 'messages' | 'responses' | 'langchain';
 
 interface MethodPattern {
   suffix: string;
@@ -75,5 +76,36 @@ export function classify(chain: string, receiver: string | null, ctx: ModuleCont
     return { ...base, confidence: 'medium', basis: 'import' };
   }
 
+  return null;
+}
+
+/** LangChain runnable invocation methods. */
+const LANGCHAIN_METHODS = ['invoke', 'ainvoke', 'stream', 'astream', 'batch', 'abatch'];
+
+export interface LcClassification {
+  provider: Provider;
+  /** Model from the LangChain constructor (may be null/dynamic). */
+  model: string | null;
+  method: string; // e.g. 'langchain.invoke'
+}
+
+/**
+ * Classify a `.invoke`/`.stream`/… call as a LangChain invocation. Gated
+ * strictly on the receiver being a variable bound to a LangChain model or a
+ * chain ending in one — `.invoke` alone is far too generic to match on shape.
+ */
+export function classifyLangChain(
+  chain: string,
+  receiver: string | null,
+  ctx: ModuleContext,
+): LcClassification | null {
+  if (!receiver) return null;
+  const bound = ctx.modelVars.get(receiver);
+  if (!bound) return null;
+  for (const m of LANGCHAIN_METHODS) {
+    if (chain.endsWith(`.${m}`)) {
+      return { provider: bound.provider, model: bound.model, method: `langchain.${m}` };
+    }
+  }
   return null;
 }

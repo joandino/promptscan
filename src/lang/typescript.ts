@@ -4,10 +4,14 @@ import {
   ctorSet,
   providerForModule,
   emptyModuleContext,
+  langChainProvider,
+  isLangChainModule,
+  messageRole,
   type ModuleContext,
   type Provider,
 } from '../detect/context.js';
-import { classify, type ArgStyle } from '../detect/patterns.js';
+import { classify, classifyLangChain, type ArgStyle } from '../detect/patterns.js';
+import type { Confidence, MatchBasis } from '../report/types.js';
 import type { SymbolTable } from '../resolve/symbols.js';
 import { readPromptFile } from '../resolve/fileload.js';
 import { estimateTokens } from '../tokens/tokenizer.js';
@@ -141,6 +145,28 @@ function collectImports(tree: Tree, language: Language, ctx: ModuleContext): voi
   }
 }
 
+/** Register LangChain chat-model constructors imported from @langchain/* packages. */
+function collectLcImports(tree: Tree, language: Language, ctx: ModuleContext): void {
+  for (const { node } of queries(language).imports.captures(tree.rootNode)) {
+    const source = node.childForFieldName('source');
+    const moduleName = source ? tsStatic(source) : null;
+    if (!moduleName || !isLangChainModule(moduleName)) continue;
+    const clause = named(node).find((c) => c.type === 'import_clause');
+    const namedImports = clause && named(clause).find((c) => c.type === 'named_imports');
+    if (!namedImports) continue;
+    for (const spec of named(namedImports)) {
+      if (spec.type !== 'import_specifier') continue;
+      const orig = spec.childForFieldName('name')?.text;
+      const alias = spec.childForFieldName('alias')?.text ?? orig;
+      const p = orig ? langChainProvider(orig) : null;
+      if (p && alias) {
+        ctx.lcCtorAliases.set(alias, p);
+        ctx.importedProviders.add(p);
+      }
+    }
+  }
+}
+
 function providerOfNew(newNode: Node, ctx: ModuleContext): Provider | null {
   const ctor = newNode.childForFieldName('constructor');
   if (!ctor) return null;
@@ -166,15 +192,26 @@ function collectDeclarators(tree: Tree, language: Language, ctx: ModuleContext):
     const pkg = isRequireCall(value);
     if (pkg) {
       const provider = providerForModule(pkg);
-      if (!provider) continue;
-      ctx.importedProviders.add(provider);
-      if (name.type === 'identifier') {
-        ctx.ctorAliases.set(name.text, provider);
-        ctx.moduleAliases.set(name.text, provider);
-      } else if (name.type === 'object_pattern') {
+      if (provider) {
+        ctx.importedProviders.add(provider);
+        if (name.type === 'identifier') {
+          ctx.ctorAliases.set(name.text, provider);
+          ctx.moduleAliases.set(name.text, provider);
+        } else if (name.type === 'object_pattern') {
+          for (const el of named(name)) {
+            if (el.type === 'shorthand_property_identifier_pattern' && ctorSet(provider).has(el.text)) {
+              ctx.ctorAliases.set(el.text, provider);
+            }
+          }
+        }
+      } else if (isLangChainModule(pkg) && name.type === 'object_pattern') {
+        // const { ChatOpenAI } = require('@langchain/openai')
         for (const el of named(name)) {
-          if (el.type === 'shorthand_property_identifier_pattern' && ctorSet(provider).has(el.text)) {
-            ctx.ctorAliases.set(el.text, provider);
+          if (el.type !== 'shorthand_property_identifier_pattern') continue;
+          const p = langChainProvider(el.text);
+          if (p) {
+            ctx.lcCtorAliases.set(el.text, p);
+            ctx.importedProviders.add(p);
           }
         }
       }
@@ -189,10 +226,47 @@ function collectDeclarators(tree: Tree, language: Language, ctx: ModuleContext):
   }
 }
 
+/** Model from a `new ChatOpenAI({ model / modelName: "..." })` object argument. */
+function lcCtorModel(newNode: Node): string | null {
+  const args = newNode.childForFieldName('arguments');
+  const obj = args && named(args).find((c) => c.type === 'object');
+  if (!obj) return null;
+  const value = objectPairValue(obj, 'model') ?? objectPairValue(obj, 'modelName');
+  return value ? tsStatic(value) : null;
+}
+
+function collectLcBindings(tree: Tree, language: Language, ctx: ModuleContext): void {
+  const rows = queries(language)
+    .declarators.captures(tree.rootNode)
+    .map(({ node }) => ({ name: node.childForFieldName('name'), value: node.childForFieldName('value') }));
+
+  // Pass 1: `const llm = new ChatOpenAI({ model })`.
+  for (const { name, value } of rows) {
+    if (name?.type !== 'identifier' || value?.type !== 'new_expression') continue;
+    const ctor = value.childForFieldName('constructor');
+    const provider = ctor?.type === 'identifier' ? ctx.lcCtorAliases.get(ctor.text) : undefined;
+    if (provider) ctx.modelVars.set(name.text, { provider, model: lcCtorModel(value) });
+  }
+
+  // Pass 2: `const chain = prompt.pipe(model)` — propagate the model binding.
+  for (const { name, value } of rows) {
+    if (name?.type !== 'identifier' || value?.type !== 'call_expression') continue;
+    const fn = value.childForFieldName('function');
+    if (fn?.type !== 'member_expression' || fn.childForFieldName('property')?.text !== 'pipe') continue;
+    const args = value.childForFieldName('arguments');
+    for (const a of args ? named(args) : []) {
+      const bound = a.type === 'identifier' ? ctx.modelVars.get(a.text) : undefined;
+      if (bound) ctx.modelVars.set(name.text, bound);
+    }
+  }
+}
+
 export function buildTsModuleContext(tree: Tree, language: Language): ModuleContext {
   const ctx = emptyModuleContext();
   collectImports(tree, language, ctx);
+  collectLcImports(tree, language, ctx);
   collectDeclarators(tree, language, ctx);
+  collectLcBindings(tree, language, ctx);
   return ctx;
 }
 
@@ -413,8 +487,47 @@ function resolvePrompt(callNode: Node, argStyle: ArgStyle, ctx: ResolveContext):
       if (list) parts.push(...resolveMessagesArg(input, ctx, 'input'));
       else parts.push(scalarPart(input, ctx, 'input', null));
     }
+  } else if (argStyle === 'langchain') {
+    parts.push(...resolveLangChainInput(callNode, ctx));
   }
   return aggregate(parts);
+}
+
+/** Content of a LangChain message element: `new HumanMessage("..")` / `["system", ".."]`. */
+function resolveLangChainElement(el: Node, ctx: ResolveContext): PromptPart {
+  if (el.type === 'new_expression') {
+    const ctor = el.childForFieldName('constructor');
+    const role = ctor?.type === 'identifier' ? messageRole(ctor.text) : null;
+    const args = el.childForFieldName('arguments');
+    const first = args ? named(args)[0] : null;
+    const content = first?.type === 'object' ? objectPairValue(first, 'content') : first;
+    return { role, origin: 'input', value: content ? resolveExpr(content, ctx) : unresolved(label(el), 'message without content', 'unknown') };
+  }
+  if (el.type === 'array') {
+    const items = named(el);
+    const role = items[0] ? tsStatic(items[0]) : null;
+    return { role, origin: 'input', value: items[1] ? resolveExpr(items[1], ctx) : unresolved(label(el), 'empty message tuple', 'unknown') };
+  }
+  return { role: null, origin: 'input', value: unresolved(label(el), 'unsupported message element', 'unknown') };
+}
+
+/** Resolve the first argument of a LangChain `.invoke(...)`. */
+function resolveLangChainInput(callNode: Node, ctx: ResolveContext): PromptPart[] {
+  const args = callNode.childForFieldName('arguments');
+  const arg = args ? named(args)[0] : null;
+  if (!arg) return [{ role: null, origin: 'input', value: unresolved('', 'no prompt argument', 'unknown') }];
+
+  const list = asArrayLiteral(arg, ctx);
+  if (list) {
+    const els = named(list);
+    return els.length > 0
+      ? els.map((el) => resolveLangChainElement(el, ctx))
+      : [{ role: null, origin: 'input', value: unresolved('[]', 'empty message list', 'unknown') }];
+  }
+  if (arg.type === 'string' || arg.type === 'template_string' || arg.type === 'identifier') {
+    return [{ role: null, origin: 'input', value: resolveExpr(arg, ctx) }];
+  }
+  return [{ role: null, origin: 'input', value: unresolved(label(arg), 'LangChain input (prompt may be defined in a template)', 'unknown') }];
 }
 
 // ---- detection -------------------------------------------------------------
@@ -439,26 +552,48 @@ export function detectTsCallSites(tree: Tree, language: Language, relPath: strin
     const node = match.captures.find((c) => c.name === 'call')?.node;
     if (!fn || !node) continue;
 
-    const result = classify(fn.text, baseIdentifier(fn), ctx);
-    if (!result) continue;
+    const receiver = baseIdentifier(fn);
+    const direct = classify(fn.text, receiver, ctx);
+    const lc = direct ? null : classifyLangChain(fn.text, receiver, ctx);
+    if (!direct && !lc) continue;
 
-    const { model, hint } = extractModel(node);
-    const prompt = resolvePrompt(node, result.argStyle, resolveCtx);
-    const tokens = estimateTokens(result.provider, model, prompt);
-    const cost = estimateCost(result.provider, model, tokens.inputTokens);
+    let provider: Provider;
+    let method: string;
+    let argStyle: ArgStyle;
+    let confidence: Confidence;
+    let basis: MatchBasis;
+    let model: string | null;
+    let hint: string | null;
+
+    if (direct) {
+      ({ provider, method, argStyle, confidence, basis } = direct);
+      ({ model, hint } = extractModel(node));
+    } else {
+      provider = lc!.provider;
+      method = lc!.method;
+      argStyle = 'langchain';
+      confidence = 'high';
+      basis = 'binding';
+      model = lc!.model;
+      hint = null;
+    }
+
+    const prompt = resolvePrompt(node, argStyle, resolveCtx);
+    const tokens = estimateTokens(provider, model, prompt);
+    const cost = estimateCost(provider, model, tokens.inputTokens);
     const pos = node.startPosition;
     sites.push({
       file: relPath,
       line: pos.row + 1,
       column: pos.column + 1,
-      provider: result.provider,
-      method: result.method,
+      provider,
+      method,
       model,
       modelResolved: model !== null,
       modelHint: hint,
-      receiver: baseIdentifier(fn),
-      confidence: result.confidence,
-      basis: result.basis,
+      receiver,
+      confidence,
+      basis,
       prompt,
       tokens,
       cost,

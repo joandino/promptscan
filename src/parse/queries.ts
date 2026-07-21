@@ -11,6 +11,8 @@ export interface DetectionQueries {
   imports: Query;
   /** name = <call>(...) assignments, for binding client variables to providers. */
   assignments: Query;
+  /** name = <any expr> assignments, for LangChain model + pipe-chain bindings. */
+  anyAssignments: Query;
 }
 
 const cache = new WeakMap<Language, DetectionQueries>();
@@ -25,6 +27,10 @@ export function getDetectionQueries(language: Language): DetectionQueries {
     assignments: new Query(
       language,
       '(assignment left: (identifier) @name right: (call) @rhs)',
+    ),
+    anyAssignments: new Query(
+      language,
+      '(assignment left: (identifier) @name right: (_) @rhs)',
     ),
   };
 
