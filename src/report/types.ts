@@ -270,5 +270,7 @@ export interface ScanReport {
     /** Pricing-table version and as-of date behind the cost figures. */
     pricingVersion: string;
     pricingAsOf: string;
+    /** Version of this report's JSON shape (see schema/scanreport.schema.json). */
+    schemaVersion: string;
   };
 }

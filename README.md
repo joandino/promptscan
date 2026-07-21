@@ -6,7 +6,7 @@ PromptScan scans a repository, finds every LLM API call, and reports what each o
 
 It makes no claims it can't prove. Every number comes from static analysis of your code. **"This prompt is 48 tokens and appears in three files"** is a fact. **"This cheaper model would work just as well"** is not — and PromptScan doesn't say it.
 
-> **Status:** pre-release (`v0.6.1`). **Python, TypeScript, and JavaScript** source; OpenAI, Anthropic, and LangChain. Roadmap phases v0.1–v0.4 are implemented and validated, v0.5 (multi-language, LangChain, dead prompts) and v1.0 (context bloat, config file) has begun landing; see [Roadmap](#roadmap). Not yet published to npm — see [Local usage](#usage).
+> **Status:** `v1.0.0`. **Python, TypeScript, and JavaScript** source; OpenAI, Anthropic, and LangChain. The full v0.1–v1.0 roadmap is implemented and validated against real repositories; see [Roadmap](#roadmap). Not yet published to npm — see [Local usage](#usage).
 
 ---
 
@@ -144,7 +144,7 @@ volume:                     # monthly-projection call volumes (same as --volume-
 ### Example output
 
 ```
-PromptScan v0.6.1  (phase: cost)
+PromptScan v1.0.0  (phase: cost)
 
   Scanned:  ./src
   Files:    4 source files
@@ -182,6 +182,8 @@ Output-cell markers: `~` approximate (proxy/fallback tokenizer) · `+` partial (
 
 - `--format table` — human-readable terminal summary (default)
 - `--format json` — the full structured `ScanReport` for downstream tooling
+
+The JSON output has a **published, versioned schema** at [`schema/scanreport.schema.json`](schema/scanreport.schema.json) (JSON Schema draft 2020-12). Every report carries `meta.schemaVersion` (currently `"1.0"`), independent of the tool's package version. The contract: additive, backward-compatible changes keep `schemaVersion` the same; a breaking change (removing/renaming a field or changing its type) bumps it. A test validates real output against the schema on every run, so the two can't drift.
 
 ---
 
@@ -278,8 +280,7 @@ Full methodology and the Twilio tradeoff writeup: [VALIDATION.md](VALIDATION.md)
 | **v0.3** | Versioned pricing table, per-call + monthly cost | ✅ done |
 | **v0.4** | `diff` command, GitHub Action, PR comments, fail-on-increase | ✅ done |
 | **v0.5** | TypeScript/JavaScript support, LangChain patterns, dead-prompt detection | ✅ done |
-| **v1.0** | Context-bloat heuristics, config file | ✅ done |
-| — | stable JSON schema | planned |
+| **v1.0** | Context-bloat heuristics, config file, stable JSON schema | ✅ done |
 
 ---
 

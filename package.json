@@ -1,6 +1,6 @@
 {
   "name": "promptscan",
-  "version": "0.6.1",
+  "version": "1.0.0",
   "description": "Static analysis for LLM call sites. Find what your prompts cost before you ship them.",
   "type": "module",
   "bin": {
@@ -10,7 +10,7 @@
   "types": "dist/index.d.ts",
   "files": [
     "dist",
-    "vendor"
+    "schema"
   ],
   "engines": {
     "node": ">=18"
@@ -44,6 +44,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "ajv": "^8.20.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0"
   }
