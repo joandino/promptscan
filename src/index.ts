@@ -31,6 +31,9 @@ export async function scan(target: string, opts: ScanOptions = {}): Promise<Scan
     readErrors: 0,
     callSites: 0,
     modelsResolved: 0,
+    promptsResolved: 0,
+    promptsPartial: 0,
+    promptsUnresolved: 0,
   };
 
   for (const absPath of files) {
@@ -52,10 +55,13 @@ export async function scan(target: string, opts: ScanOptions = {}): Promise<Scan
     }
 
     // Detection runs on partial trees too — tree-sitter recovers enough.
-    for (const site of detectCallSites(outcome.tree, language, relPath)) {
+    for (const site of detectCallSites(outcome.tree, language, relPath, absPath)) {
       callSites.push(site);
       stats.callSites++;
       if (site.modelResolved) stats.modelsResolved++;
+      if (site.prompt.status === 'resolved') stats.promptsResolved++;
+      else if (site.prompt.status === 'partial') stats.promptsPartial++;
+      else stats.promptsUnresolved++;
     }
 
     outcome.tree.delete();

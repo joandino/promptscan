@@ -17,6 +17,47 @@ export type MatchBasis =
   | 'import' // corroborated by an SDK import in the file
   | 'binding'; // receiver variable bound to a known client constructor
 
+/** Whether a prompt (or a part of it) could be statically determined. */
+export type ResolutionStatus = 'resolved' | 'partial' | 'unresolved';
+
+/** Where a resolved value ultimately came from. */
+export type ResolutionSource = 'literal' | 'concat' | 'fstring' | 'const' | 'file' | 'unknown';
+
+/** A run of prompt text: known (`static`) or a runtime hole (`dynamic`). */
+export interface PromptSegment {
+  kind: 'static' | 'dynamic';
+  /** For static, the literal text; for dynamic, a short label of the source. */
+  text: string;
+}
+
+export interface ResolvedValue {
+  status: ResolutionStatus;
+  /** Concatenation of static segments — the statically-known text. */
+  text: string;
+  segments: PromptSegment[];
+  source: ResolutionSource;
+  /** Present when status is not 'resolved': why. */
+  reason?: string;
+}
+
+/** Which argument a prompt part came from. */
+export type PromptOrigin = 'messages' | 'system' | 'input' | 'instructions' | 'prompt';
+
+export interface PromptPart {
+  /** Message role when known (system/user/assistant), else null. */
+  role: string | null;
+  origin: PromptOrigin;
+  value: ResolvedValue;
+}
+
+export interface ResolvedPrompt {
+  /** Aggregate over all parts. */
+  status: ResolutionStatus;
+  parts: PromptPart[];
+  /** Present when nothing could be extracted at all. */
+  reason?: string;
+}
+
 export interface CallSite {
   /** Path relative to the scan root. */
   file: string;
@@ -34,6 +75,8 @@ export interface CallSite {
   receiver: string | null;
   confidence: Confidence;
   basis: MatchBasis;
+  /** Statically-resolved prompt content (M3). */
+  prompt: ResolvedPrompt;
 }
 
 export interface FileParseSummary {
@@ -53,6 +96,12 @@ export interface ScanStats {
   callSites: number;
   /** Call sites whose model argument resolved to a literal. */
   modelsResolved: number;
+  /** Call sites whose prompt fully resolved. */
+  promptsResolved: number;
+  /** Call sites with a mix of static and dynamic prompt content. */
+  promptsPartial: number;
+  /** Call sites whose prompt could not be resolved at all. */
+  promptsUnresolved: number;
 }
 
 export interface ScanReport {
