@@ -10,6 +10,7 @@ import type {
 } from '../report/types.js';
 import { keywordArgValue, staticString } from './nodes.js';
 import { detectFileLoadPath, readPromptFile } from './fileload.js';
+import type { ArgStyle } from '../detect/patterns.js';
 
 export interface ResolveContext {
   symbols: SymbolTable;
@@ -218,12 +219,6 @@ function aggregate(parts: PromptPart[]): ResolvedPrompt {
   }
   return { status: 'partial', parts, reason: firstReason };
 }
-
-/**
- * Argument shape of an LLM call, shared across a method family so that
- * create/parse/stream variants all resolve identically.
- */
-export type ArgStyle = 'chat' | 'messages' | 'responses';
 
 /** Extract and resolve the prompt content for a detected call site. */
 export function resolvePrompt(

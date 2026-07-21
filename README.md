@@ -6,7 +6,7 @@ PromptScan scans a repository, finds every LLM API call, and reports what each o
 
 It makes no claims it can't prove. Every number comes from static analysis of your code. **"This prompt is 48 tokens and appears in three files"** is a fact. **"This cheaper model would work just as well"** is not — and PromptScan doesn't say it.
 
-> **Status:** pre-release (`v0.4.0`). Python source, OpenAI + Anthropic. Roadmap phases v0.1–v0.4 are implemented and validated; see [Roadmap](#roadmap). Not yet published to npm — see [Local usage](#usage).
+> **Status:** pre-release (`v0.5.0`). **Python, TypeScript, and JavaScript** source; OpenAI + Anthropic. Roadmap phases v0.1–v0.4 are implemented and validated, and v0.5 multi-language support has landed; see [Roadmap](#roadmap). Not yet published to npm — see [Local usage](#usage).
 
 ---
 
@@ -30,23 +30,23 @@ Point it at a directory and it runs a pipeline:
 
 ### 1. Call-site detection
 
-Parses each file with tree-sitter and finds LLM invocations:
+Parses each file with tree-sitter and finds LLM invocations, in **Python, TypeScript, and JavaScript** (incl. JSX/TSX, ESM `import` and CommonJS `require`):
 
 | Provider | Methods detected |
 |---|---|
 | OpenAI | `chat.completions.create` / `.parse` / `.stream`, `responses.create` / `.parse` / `.stream` |
 | Anthropic | `messages.create` / `.stream` |
 
-Detection is corroborated by two independent signals beyond the method name — an SDK import (`import openai`, `from anthropic import ...`) and client-variable binding (`client = openai.OpenAI()`). Long, self-identifying chains (`chat.completions.create`) report **high** confidence on shape alone; short, ambiguous chains (`messages.create` — which is *also Twilio's SMS API*) require an import (**medium**) or a binding (**high**), and are dropped otherwise. The table shows *why* each medium call site was included.
+Detection is corroborated by two independent signals beyond the method name — an SDK import (`import openai`, `import { Anthropic } from "@anthropic-ai/sdk"`, `require("openai")`) and client-variable binding (`client = openai.OpenAI()`, `new OpenAI()`). Long, self-identifying chains (`chat.completions.create`) report **high** confidence on shape alone; short, ambiguous chains (`messages.create` — which is *also Twilio's SMS API*) require an import (**medium**) or a binding (**high**), and are dropped otherwise. The table shows *why* each medium call site was included.
 
 ### 2. Prompt resolution
 
 Traces the prompt argument (`messages=`, `system=`, `input=`, `instructions=`) back to its source:
 
-- String literals, adjacent and `+` concatenation → **resolved**
+- String literals and `+` concatenation → **resolved**
 - Module constants / single-assignment variables → resolved via a symbol table
-- f-strings → **partial** (static text kept, `{…}` interpolations flagged)
-- Static file loads (`open("p.txt").read()`, `Path("p.md").read_text()`) → resolved from disk
+- f-strings (Python) and template literals (JS/TS) → **partial** (static text kept, `{…}` / `${…}` interpolations flagged)
+- Static file loads (`open("p.txt").read()`, `Path("p.md").read_text()`, `readFileSync("p.txt")`) → resolved from disk
 - Anything from a runtime parameter, a reassigned variable, or a function call → **unresolved, with a reason**
 
 The unresolved and partial counts are a headline figure, and each is listed with its reason. A report that silently skips half your prompts is worse than useless.
@@ -108,10 +108,10 @@ sites:
 ### Example output
 
 ```
-PromptScan v0.4.0  (phase: cost)
+PromptScan v0.5.0  (phase: cost)
 
   Scanned:  ./src
-  Files:    4 Python files
+  Files:    4 source files
   Parsed:   4 clean, 0 partial (recoverable), 0 unreadable
 
   Call sites: 4 (openai 4, anthropic 0)
@@ -219,9 +219,9 @@ Full methodology and the Twilio tradeoff writeup: [VALIDATION.md](VALIDATION.md)
 
 ## Known limitations
 
-- **Python only** at this stage (TypeScript/JavaScript is roadmapped for v0.5).
+- **Direct SDK calls only.** LangChain wrappers (`ChatOpenAI`, `.invoke`, `LLMChain`) and dead-prompt detection are the remaining v0.5 items, not yet implemented.
 - **Provider SDK internals**: a call on an attribute receiver (`self._client.messages.create`) in a file that doesn't import the SDK by name isn't detected — confined to code living *inside* a provider package.
-- **Cross-module constants** (`from other import PROMPT`) and `Path` *variables* report unresolved rather than guess.
+- **Cross-module constants** (`from other import PROMPT`) and non-literal file paths report unresolved rather than guess.
 - **Pricing drifts.** The table is a single bundled file stamped with an as-of date; OpenAI prices are listed rates — verify before relying on them.
 
 ## Explicit non-goals
@@ -241,7 +241,8 @@ Full methodology and the Twilio tradeoff writeup: [VALIDATION.md](VALIDATION.md)
 | **v0.2** | Exact + near-duplicate detection, JSON output | ✅ done |
 | **v0.3** | Versioned pricing table, per-call + monthly cost | ✅ done |
 | **v0.4** | `diff` command, GitHub Action, PR comments, fail-on-increase | ✅ done |
-| **v0.5** | TypeScript/JavaScript support, LangChain patterns, dead-prompt detection | planned |
+| **v0.5** | TypeScript/JavaScript support | ✅ done |
+| — | LangChain patterns, dead-prompt detection | planned |
 | **v1.0** | Context-bloat heuristics, config file, stable JSON schema | planned |
 
 ---
@@ -251,7 +252,7 @@ Full methodology and the Twilio tradeoff writeup: [VALIDATION.md](VALIDATION.md)
 | Concern | Choice |
 |---|---|
 | CLI | TypeScript / Node |
-| Parsing | `web-tree-sitter` (WASM) + `tree-sitter-python` — portable via npx, error-tolerant |
+| Parsing | `web-tree-sitter` (WASM) + `tree-sitter-python` / `-typescript` / `-tsx` — portable via npx, error-tolerant |
 | Tokenization | `js-tiktoken` (OpenAI); `cl100k` proxy for Anthropic |
 | Similarity | Token-set Jaccard |
 | Output | `cli-table3`, JSON |
@@ -271,7 +272,7 @@ npm run typecheck    # tsc --noEmit
 npm run dev -- ./src # run the CLI without building
 ```
 
-Tests are fixture-driven — small Python inputs under `test/fixtures/` exercise every detection, resolution, tokenization, cost, and duplicate case.
+Tests are fixture-driven — small Python and TypeScript/JavaScript inputs under `test/fixtures/` exercise every detection, resolution, tokenization, cost, duplicate, and diff case.
 
 ## License
 
