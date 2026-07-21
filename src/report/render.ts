@@ -50,9 +50,39 @@ export function renderScanSummary(report: ScanReport): string {
   if (dup) lines.push('', dup);
   const dead = renderDeadPrompts(report);
   if (dead) lines.push('', dead);
+  const bloat = renderBloat(report);
+  if (bloat) lines.push('', bloat);
   const proj = renderProjection(report);
   if (proj) lines.push('', proj);
   return lines.join('\n') + '\n';
+}
+
+function renderBloat(report: ScanReport): string {
+  const { oversized, fewShot, boilerplate, thresholds } = report.bloat;
+  if (oversized.length === 0 && fewShot.length === 0 && boilerplate.length === 0) return '';
+
+  const lines: string[] = ['  Context bloat (heuristics):'];
+
+  if (oversized.length > 0) {
+    lines.push(`    Oversized prompts (≥${thresholds.largeTokens.toLocaleString('en-US')} tok):`);
+    for (const o of oversized) {
+      lines.push(`      ${o.file}:${o.line} — ${o.tokens.toLocaleString('en-US')} tok`);
+    }
+  }
+  if (fewShot.length > 0) {
+    lines.push(`    Many-message prompts (≥${thresholds.manyMessages} parts, possible few-shot):`);
+    for (const f of fewShot) {
+      lines.push(`      ${f.file}:${f.line} — ${f.messageCount} messages, ${f.tokens.toLocaleString('en-US')} tok`);
+    }
+  }
+  if (boilerplate.length > 0) {
+    lines.push(`    Repeated boilerplate (≥${thresholds.boilerplateMinSites} sites — extract or cache):`);
+    for (const b of boilerplate) {
+      lines.push(`      ×${b.sites.length}, ${b.tokens} tok each: "${preview(b.text)}"`);
+      lines.push(`          ${b.sites.map((s) => `${s.file}:${s.line}`).join('  ')}`);
+    }
+  }
+  return lines.join('\n');
 }
 
 function renderDeadPrompts(report: ScanReport): string {

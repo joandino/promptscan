@@ -170,6 +170,8 @@ export interface ScanStats {
   unpricedCallSites: number;
   /** Prompt constants with no reachable reference (heuristic). */
   deadPrompts: number;
+  /** Total context-bloat flags (oversized + few-shot + boilerplate). */
+  bloatFlags: number;
 }
 
 /** A call-site location, for referencing from duplicate reports. */
@@ -219,6 +221,35 @@ export interface DeadPrompt {
   tokens: number;
 }
 
+/** A single prompt whose resolved size exceeds the bloat threshold. */
+export interface OversizedPrompt {
+  file: string;
+  line: number;
+  tokens: number;
+}
+
+/** A prompt with many message parts — a possible few-shot-example pile-up. */
+export interface FewShotPrompt {
+  file: string;
+  line: number;
+  messageCount: number;
+  tokens: number;
+}
+
+/** A prompt block repeated verbatim across call sites — extract or cache it. */
+export interface BoilerplateBlock {
+  text: string;
+  tokens: number;
+  sites: SiteRef[];
+}
+
+export interface BloatReport {
+  oversized: OversizedPrompt[];
+  fewShot: FewShotPrompt[];
+  boilerplate: BoilerplateBlock[];
+  thresholds: { largeTokens: number; manyMessages: number; boilerplateMinSites: number };
+}
+
 export interface ScanReport {
   /** Absolute path of the scan target. */
   root: string;
@@ -227,6 +258,8 @@ export interface ScanReport {
   duplicates: DuplicateReport;
   /** Prompt constants with no reachable call site (v0.5, heuristic). */
   deadPrompts: DeadPrompt[];
+  /** Context-bloat flags (v1.0, heuristics). */
+  bloat: BloatReport;
   /** Monthly cost projection, present only when a volume estimate is supplied. */
   projection: MonthlyProjection | null;
   stats: ScanStats;
