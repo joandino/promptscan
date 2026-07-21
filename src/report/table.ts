@@ -12,22 +12,30 @@ function confidenceCell(site: CallSite): string {
   return site.confidence === 'high' ? 'high' : `medium (${site.basis})`;
 }
 
-/** Total statically-known characters across a call site's prompt parts. */
-export function promptChars(site: CallSite): number {
-  return site.prompt.parts.reduce((n, p) => n + p.value.text.length, 0);
+/**
+ * Input-token cell. Encodes prompt status via markers:
+ *   —   unresolved (no countable content)
+ *   +   partial (static content only — a floor)
+ *   ~   approximate (proxy/fallback tokenizer)
+ */
+function tokenCell(site: CallSite): string {
+  if (site.prompt.status === 'unresolved') return '—';
+  const prefix = site.tokens.approximate ? '~' : '';
+  const suffix = site.prompt.status === 'partial' ? '+' : '';
+  return `${prefix}${site.tokens.inputTokens.toLocaleString('en-US')}${suffix}`;
 }
 
-function promptCell(site: CallSite): string {
-  const { status } = site.prompt;
-  if (status === 'unresolved') return 'unresolved';
-  return `${status} (${promptChars(site)}c)`;
+/** Whether the table needs its marker legend (any non-exact token cell). */
+function needsLegend(callSites: CallSite[]): boolean {
+  return callSites.some((s) => s.prompt.status !== 'resolved' || s.tokens.approximate);
 }
 
 /** Render detected call sites as a plain (color-free) terminal table. */
 export function renderCallSiteTable(callSites: CallSite[]): string {
   const table = new Table({
-    head: ['Location', 'Provider', 'Model', 'Prompt', 'Confidence'],
+    head: ['Location', 'Provider', 'Model', 'Input tok', 'Confidence'],
     style: { head: [], border: [] },
+    colAligns: ['left', 'left', 'left', 'right', 'left'],
   });
 
   for (const site of callSites) {
@@ -35,10 +43,14 @@ export function renderCallSiteTable(callSites: CallSite[]): string {
       `${site.file}:${site.line}`,
       site.provider,
       modelCell(site),
-      promptCell(site),
+      tokenCell(site),
       confidenceCell(site),
     ]);
   }
 
-  return table.toString();
+  let out = table.toString();
+  if (needsLegend(callSites)) {
+    out += '\n  ~ approximate (proxy/fallback tokenizer)   + partial (static floor)   — unresolved';
+  }
+  return out;
 }
