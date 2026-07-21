@@ -1,44 +1,14 @@
 import type { Node, Tree, Language } from 'web-tree-sitter';
 import { getDetectionQueries } from '../parse/queries.js';
+import {
+  ctorSet,
+  providerForModule,
+  emptyModuleContext,
+  type ModuleContext,
+  type Provider,
+} from './context.js';
 
-export type Provider = 'openai' | 'anthropic';
-
-/** Client constructor names, per provider, used to bind variables to providers. */
-const OPENAI_CTORS = new Set(['OpenAI', 'AsyncOpenAI', 'AzureOpenAI', 'AsyncAzureOpenAI']);
-const ANTHROPIC_CTORS = new Set([
-  'Anthropic',
-  'AsyncAnthropic',
-  'AnthropicBedrock',
-  'AsyncAnthropicBedrock',
-  'AnthropicVertex',
-  'AsyncAnthropicVertex',
-]);
-
-function ctorSet(provider: Provider): Set<string> {
-  return provider === 'openai' ? OPENAI_CTORS : ANTHROPIC_CTORS;
-}
-
-function providerForModule(moduleName: string): Provider | null {
-  const head = moduleName.split('.')[0];
-  if (head === 'openai') return 'openai';
-  if (head === 'anthropic') return 'anthropic';
-  return null;
-}
-
-/**
- * Per-module facts gathered from imports and assignments, used to raise or
- * gate confidence in call-site detection.
- */
-export interface ModuleContext {
-  /** Providers whose SDK is imported anywhere in the file. */
-  importedProviders: Set<Provider>;
-  /** Local module name (possibly aliased) → provider, e.g. 'openai'→openai. */
-  moduleAliases: Map<string, Provider>;
-  /** Local constructor name (possibly aliased) → provider, e.g. 'OpenAI'→openai. */
-  ctorAliases: Map<string, Provider>;
-  /** Variable name → provider it was constructed from, e.g. 'client'→anthropic. */
-  clientVars: Map<string, Provider>;
-}
+export type { Provider, ModuleContext } from './context.js';
 
 function collectImports(tree: Tree, language: Language, ctx: ModuleContext): void {
   const { imports } = getDetectionQueries(language);
@@ -132,12 +102,7 @@ function collectClientVars(tree: Tree, language: Language, ctx: ModuleContext): 
 
 /** Build the import/binding context for a single parsed module. */
 export function buildModuleContext(tree: Tree, language: Language): ModuleContext {
-  const ctx: ModuleContext = {
-    importedProviders: new Set(),
-    moduleAliases: new Map(),
-    ctorAliases: new Map(),
-    clientVars: new Map(),
-  };
+  const ctx = emptyModuleContext();
   collectImports(tree, language, ctx);
   collectClientVars(tree, language, ctx);
   return ctx;

@@ -1,6 +1,10 @@
 import path from 'node:path';
 import { stat } from 'node:fs/promises';
 import { globby } from 'globby';
+import { langForExtension } from '../parse/parser.js';
+
+/** File extensions PromptScan parses. */
+const SUPPORTED_GLOB = '**/*.{py,ts,tsx,mts,cts,js,jsx,mjs,cjs}';
 
 /** Directories never worth scanning for LLM call sites. */
 const DEFAULT_IGNORES = [
@@ -12,10 +16,15 @@ const DEFAULT_IGNORES = [
   '**/.git/**',
   '**/dist/**',
   '**/build/**',
+  '**/out/**',
+  '**/.next/**',
+  '**/coverage/**',
   '**/site-packages/**',
   '**/.mypy_cache/**',
   '**/.pytest_cache/**',
   '**/.tox/**',
+  '**/*.d.ts',
+  '**/*.min.js',
 ];
 
 export interface DiscoveryOptions {
@@ -25,12 +34,13 @@ export interface DiscoveryOptions {
 
 /**
  * Resolve a scan target (file or directory) to a sorted list of absolute
- * paths to Python files. A single .py file is returned as-is; a directory is
- * walked recursively with sensible ignores.
+ * paths to supported source files (Python, TypeScript, JavaScript). A single
+ * file is returned as-is when its extension is supported; a directory is walked
+ * recursively with sensible ignores.
  *
  * Throws if the target does not exist.
  */
-export async function discoverPythonFiles(
+export async function discoverSourceFiles(
   target: string,
   opts: DiscoveryOptions = {},
 ): Promise<string[]> {
@@ -44,10 +54,10 @@ export async function discoverPythonFiles(
   }
 
   if (info.isFile()) {
-    return absTarget.endsWith('.py') ? [absTarget] : [];
+    return langForExtension(path.extname(absTarget)) ? [absTarget] : [];
   }
 
-  const matches = await globby('**/*.py', {
+  const matches = await globby(SUPPORTED_GLOB, {
     cwd: absTarget,
     absolute: true,
     ignore: DEFAULT_IGNORES,

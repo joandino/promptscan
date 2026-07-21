@@ -14,11 +14,11 @@ export function renderScanSummary(report: ScanReport): string {
   lines.push(`PromptScan v${report.meta.version}  (phase: ${report.meta.phase})`);
   lines.push('');
   lines.push(`  Scanned:  ${report.root}`);
-  lines.push(`  Files:    ${stats.discovered} Python file${stats.discovered === 1 ? '' : 's'}`);
+  lines.push(`  Files:    ${stats.discovered} source file${stats.discovered === 1 ? '' : 's'}`);
 
   if (stats.discovered === 0) {
     lines.push('');
-    lines.push('  No Python files found under the target.');
+    lines.push('  No source files found under the target.');
     lines.push('');
     return lines.join('\n') + '\n';
   }

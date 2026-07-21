@@ -4,37 +4,68 @@ import { Parser, Language, type Tree } from 'web-tree-sitter';
 
 const require = createRequire(import.meta.url);
 
-let pythonLanguage: Language | null = null;
+/** Grammars PromptScan can parse. */
+export type LangId = 'python' | 'typescript' | 'tsx';
+
+const WASM: Record<LangId, string> = {
+  python: 'tree-sitter-wasms/out/tree-sitter-python.wasm',
+  typescript: 'tree-sitter-wasms/out/tree-sitter-typescript.wasm',
+  tsx: 'tree-sitter-wasms/out/tree-sitter-tsx.wasm',
+};
+
+const languages = new Map<LangId, Language>();
 let initialized = false;
 
 /**
- * Initialize the tree-sitter WASM runtime and load the Python grammar.
+ * Initialize the tree-sitter WASM runtime and load every grammar.
  * Idempotent — safe to call more than once. Must be awaited before parsing.
  */
 export async function initParser(): Promise<void> {
   if (initialized) return;
   await Parser.init();
-  // Resolved from node_modules so it works in both dev (tsx) and dist builds.
-  const wasmPath = require.resolve('tree-sitter-wasms/out/tree-sitter-python.wasm');
-  pythonLanguage = await Language.load(wasmPath);
+  for (const [id, rel] of Object.entries(WASM) as [LangId, string][]) {
+    // Resolved from node_modules so it works in both dev (tsx) and dist builds.
+    languages.set(id, await Language.load(require.resolve(rel)));
+  }
   initialized = true;
 }
 
-export function getPythonLanguage(): Language {
-  if (!pythonLanguage) {
-    throw new Error('Parser not initialized — call initParser() before parsing.');
-  }
-  return pythonLanguage;
+export function getLanguage(id: LangId): Language {
+  const lang = languages.get(id);
+  if (!lang) throw new Error(`Parser not initialized for '${id}' — call initParser() first.`);
+  return lang;
 }
 
-/**
- * Create a Python parser bound to the loaded grammar. A single instance can be
- * reused across many files; call parse() per file.
- */
-export function createPythonParser(): Parser {
+/** Back-compat alias for the Python grammar. */
+export function getPythonLanguage(): Language {
+  return getLanguage('python');
+}
+
+/** Create a parser bound to a loaded grammar. Reusable across files. */
+export function createParser(id: LangId): Parser {
   const parser = new Parser();
-  parser.setLanguage(getPythonLanguage());
+  parser.setLanguage(getLanguage(id));
   return parser;
+}
+
+/** Map a file extension to the grammar that parses it, or null if unsupported. */
+export function langForExtension(ext: string): LangId | null {
+  switch (ext.toLowerCase()) {
+    case '.py':
+      return 'python';
+    case '.ts':
+    case '.mts':
+    case '.cts':
+    case '.js':
+    case '.mjs':
+    case '.cjs':
+      return 'typescript';
+    case '.tsx':
+    case '.jsx':
+      return 'tsx';
+    default:
+      return null;
+  }
 }
 
 export type FileParseOutcome =
@@ -43,9 +74,9 @@ export type FileParseOutcome =
   | { status: 'read-error'; message: string };
 
 /**
- * Read and parse a single Python file. tree-sitter is error-tolerant: syntax
- * errors yield a usable tree flagged as 'partial' rather than a hard failure.
- * Only an I/O/decode failure produces 'read-error'.
+ * Read and parse a single file with the given parser. tree-sitter is
+ * error-tolerant: syntax errors yield a usable tree flagged 'partial' rather
+ * than a hard failure. Only an I/O/decode failure produces 'read-error'.
  */
 export async function parseFile(parser: Parser, absPath: string): Promise<FileParseOutcome> {
   let source: string;

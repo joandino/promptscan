@@ -1,7 +1,16 @@
 import path from 'node:path';
-import { discoverPythonFiles, type DiscoveryOptions } from './discovery/walk.js';
-import { initParser, createPythonParser, parseFile, getPythonLanguage } from './parse/parser.js';
+import type { Parser } from 'web-tree-sitter';
+import { discoverSourceFiles, type DiscoveryOptions } from './discovery/walk.js';
+import {
+  initParser,
+  createParser,
+  getLanguage,
+  parseFile,
+  langForExtension,
+  type LangId,
+} from './parse/parser.js';
 import { detectCallSites } from './detect/callsites.js';
+import { detectTsCallSites } from './lang/typescript.js';
 import { findDuplicates, type DuplicateOptions } from './analyze/duplicates.js';
 import { projectMonthly, type VolumeConfig } from './pricing/cost.js';
 import { PRICING_VERSION, PRICING_AS_OF } from './pricing/table.js';
@@ -16,17 +25,24 @@ export interface ScanOptions extends DiscoveryOptions, DuplicateOptions {
 }
 
 /**
- * v0.1 scan: discover Python files, parse each, and detect OpenAI/Anthropic
- * call sites (M2). Prompt resolution and tokenization layer onto this pass in
- * later milestones.
+ * Scan a target: discover supported source files (Python, TypeScript,
+ * JavaScript), parse each with the right grammar, detect OpenAI/Anthropic call
+ * sites, resolve prompts, count tokens, estimate cost, and find duplicates.
  */
 export async function scan(target: string, opts: ScanOptions = {}): Promise<ScanReport> {
   const root = path.resolve(target);
-  const files = await discoverPythonFiles(target, opts);
+  const files = await discoverSourceFiles(target, opts);
 
   await initParser();
-  const parser = createPythonParser();
-  const language = getPythonLanguage();
+  const parsers = new Map<LangId, Parser>();
+  const parserFor = (id: LangId): Parser => {
+    let p = parsers.get(id);
+    if (!p) {
+      p = createParser(id);
+      parsers.set(id, p);
+    }
+    return p;
+  };
 
   const summaries: FileParseSummary[] = [];
   const callSites: CallSite[] = [];
@@ -50,7 +66,10 @@ export async function scan(target: string, opts: ScanOptions = {}): Promise<Scan
 
   for (const absPath of files) {
     const relPath = path.relative(root, absPath) || path.basename(absPath);
-    const outcome = await parseFile(parser, absPath);
+    const lang = langForExtension(path.extname(absPath));
+    if (!lang) continue; // discovery already filtered, but keep the type honest
+
+    const outcome = await parseFile(parserFor(lang), absPath);
 
     if (outcome.status === 'read-error') {
       stats.readErrors++;
@@ -67,7 +86,12 @@ export async function scan(target: string, opts: ScanOptions = {}): Promise<Scan
     }
 
     // Detection runs on partial trees too — tree-sitter recovers enough.
-    for (const site of detectCallSites(outcome.tree, language, relPath, absPath)) {
+    const language = getLanguage(lang);
+    const detected =
+      lang === 'python'
+        ? detectCallSites(outcome.tree, language, relPath, absPath)
+        : detectTsCallSites(outcome.tree, language, relPath, absPath);
+    for (const site of detected) {
       callSites.push(site);
       stats.callSites++;
       if (site.modelResolved) stats.modelsResolved++;
@@ -86,7 +110,7 @@ export async function scan(target: string, opts: ScanOptions = {}): Promise<Scan
     outcome.tree.delete();
   }
 
-  parser.delete();
+  for (const p of parsers.values()) p.delete();
 
   callSites.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line || a.column - b.column);
 
