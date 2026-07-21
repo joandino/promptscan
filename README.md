@@ -1,5 +1,7 @@
 # PromptScan
 
+[![npm](https://img.shields.io/npm/v/promptscan)](https://www.npmjs.com/package/promptscan) [![CI](https://github.com/joandino/promptscan/actions/workflows/ci.yml/badge.svg)](https://github.com/joandino/promptscan/actions/workflows/ci.yml)
+
 Find out what your LLM prompts cost before you ship them.
 
 PromptScan is a command-line tool that reads your codebase, finds every call to an LLM API, and reports the token count and dollar cost of each prompt. Along the way it points out duplicated prompts, prompt constants that nothing references anymore, and context blocks that have quietly grown too large.
