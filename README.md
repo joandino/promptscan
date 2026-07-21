@@ -1,147 +1,40 @@
 # PromptScan
 
-> Static analysis for LLM call sites. Find what your prompts cost before you ship them.
+Find out what your LLM prompts cost before you ship them.
 
-PromptScan scans a repository, finds every LLM API call, and reports what each one costs in tokens and money — plus the duplicates and the oversized prompts nobody noticed.
+PromptScan is a command-line tool that reads your codebase, finds every call to an LLM API, and reports the token count and dollar cost of each prompt. Along the way it points out duplicated prompts, prompt constants that nothing references anymore, and context blocks that have quietly grown too large.
 
-It makes no claims it can't prove. Every number comes from static analysis of your code. **"This prompt is 48 tokens and appears in three files"** is a fact. **"This cheaper model would work just as well"** is not — and PromptScan doesn't say it.
+It works by static analysis, so there's nothing to instrument and no API key to set up. Run it locally, or drop it into CI to comment on a pull request. The catch is that it only sees what the source makes knowable: when a prompt is assembled at runtime from a database or a request parameter, PromptScan marks it unresolved instead of guessing.
 
-> **Status:** `v1.0.0`. **Python, TypeScript, and JavaScript** source; OpenAI, Anthropic, and LangChain. The full v0.1–v1.0 roadmap is implemented and validated against real repositories; see [Roadmap](#roadmap). Not yet published to npm — see [Local usage](#usage).
+It supports Python, TypeScript, and JavaScript, and understands the OpenAI, Anthropic, and LangChain SDKs. Requires Node 18+.
 
----
+## Why not just use LangSmith / Langfuse / Helicone?
 
-## Why this exists
+Those are runtime tools. They tell you what your calls did in production, which is useful, but they can't tell you anything about a prompt until it actually runs, and they can't see the prompt whose caller you deleted six months ago. PromptScan runs on the repo, so it catches things before they ship and costs nothing to run.
 
-Runtime observability tools (LangSmith, Langfuse, Helicone) tell you what your LLM calls did in production. They can't tell you anything about a prompt until it runs.
-
-PromptScan works on the repo instead. That means:
-
-- It runs in CI, on a PR, before anything reaches production.
-- It costs nothing to run — no instrumentation, no SDK wrapper, no API key.
-- It reads what's statically determinable, and **reports the rest as unresolved rather than guessing.**
-
----
-
-## What it does
-
-Point it at a directory and it runs a pipeline:
-
-**discover → detect → resolve prompts → count tokens → estimate cost → find duplicates → project spend**
-
-### 1. Call-site detection
-
-Parses each file with tree-sitter and finds LLM invocations, in **Python, TypeScript, and JavaScript** (incl. JSX/TSX, ESM `import` and CommonJS `require`):
-
-| Provider / framework | What's detected |
-|---|---|
-| OpenAI | `chat.completions.create` / `.parse` / `.stream`, `responses.create` / `.parse` / `.stream` |
-| Anthropic | `messages.create` / `.stream` |
-| LangChain | `ChatOpenAI` / `ChatAnthropic` / `AzureChatOpenAI` → `.invoke` / `.stream` / `.batch` (+ async) |
-
-Detection is corroborated by two independent signals beyond the method name — an SDK import (`import openai`, `import { Anthropic } from "@anthropic-ai/sdk"`, `require("openai")`) and client-variable binding (`client = openai.OpenAI()`, `new OpenAI()`). Long, self-identifying chains (`chat.completions.create`) report **high** confidence on shape alone; short, ambiguous chains (`messages.create` — which is *also Twilio's SMS API*) require an import (**medium**) or a binding (**high**), and are dropped otherwise. The table shows *why* each medium call site was included.
-
-For **LangChain**, the model + provider come from the constructor (`ChatOpenAI(model="gpt-4o")`), and the call site is `.invoke()`/`.stream()` on that model — or on a chain that ends in it (`chain = prompt | model`, `prompt.pipe(model)`). Because `.invoke` is generic, it's only flagged when the receiver is a bound model, never on shape. Prompts passed directly to `invoke(...)` (strings, `SystemMessage`/`HumanMessage` lists) resolve; prompts held in a `ChatPromptTemplate` are honestly reported unresolved.
-
-### 2. Prompt resolution
-
-Traces the prompt argument (`messages=`, `system=`, `input=`, `instructions=`) back to its source:
-
-- String literals and `+` concatenation → **resolved**
-- Module constants / single-assignment variables → resolved via a symbol table
-- f-strings (Python) and template literals (JS/TS) → **partial** (static text kept, `{…}` / `${…}` interpolations flagged)
-- Static file loads (`open("p.txt").read()`, `Path("p.md").read_text()`, `readFileSync("p.txt")`) → resolved from disk
-- Anything from a runtime parameter, a reassigned variable, or a function call → **unresolved, with a reason**
-
-The unresolved and partial counts are a headline figure, and each is listed with its reason. A report that silently skips half your prompts is worse than useless.
-
-### 3. Token counts
-
-Tokenizes each resolved prompt and reports **input** tokens (plus documented message-envelope overhead):
-
-- **OpenAI** — `js-tiktoken` with the correct encoding per model (`o200k_base` / `cl100k_base`).
-- **Anthropic** — a `cl100k` proxy, labeled `~` **approximate (no public tokenizer)**.
-
-Output tokens aren't statically knowable, so PromptScan never invents them — everything is explicitly *input-only*. Partial prompts count their static text as a floor (`+`).
-
-### 4. Cost
-
-Multiplies tokens by a **bundled, versioned pricing table** (OpenAI + Anthropic), stamped with an as-of date. Reports per-call and per-scan input cost. Unknown models are reported **unpriced** and excluded from totals — never guessed. With a `--volume-config`, it projects monthly cost.
-
-### 5. Duplicate detection
-
-- **Exact** — identical normalized prompt text across call sites, with a wasted-token tally.
-- **Near-duplicate** — token-set Jaccard similarity above a configurable threshold (default `0.85`), catching prompts that drifted apart through copy-paste edits.
-
-### 6. Dead-prompt detection (heuristic)
-
-A prompt-shaped string constant with **no reachable reference** anywhere in the scanned code. Conservative by design — flagged only when the name is never referenced in any file (imports and property accesses count), never appears inside a string literal (guards `__all__`, `getattr`, dynamic access), and the string is a module-level, fully-static, ≥6-word literal. Labeled a heuristic and reported separately: it can't see runtime reflection, and a library's public prompt consumed by external code will look unused.
-
-### 7. Context-bloat flags (heuristics)
-
-Three lenses on oversized context, all labeled as heuristics:
-
-- **Oversized prompts** — a single resolved prompt above a token threshold (default 2,000).
-- **Many-message / few-shot** — a prompt with many message parts (default ≥6), a possible example pile-up.
-- **Repeated boilerplate** — a prompt *block* (e.g. a system message) repeated verbatim across ≥3 call sites. This is the part-level analogue of duplicate detection: it catches a shared system prompt across prompts whose user turns differ, which whole-prompt dedup misses — an extract-or-cache candidate.
-
----
-
-## Usage
-
-Not yet on npm. To run it locally:
+## Install
 
 ```bash
-git clone <this-repo> && cd prompt-scan
-npm install
-npm run build
-
-# scan a directory
-node dist/cli.js ./src
-
-# or, without building, via the dev runner
-npm run dev -- ./src
+npm install -g promptscan
+promptscan ./src
 ```
 
-Once published, the intended entry point is `npx promptscan ./src`.
+Or run it without installing anything:
 
 ```bash
-node dist/cli.js ./src                          # table summary (default)
-node dist/cli.js ./src --format json            # full structured report
-node dist/cli.js ./src --similarity 0.9         # stricter near-dup threshold
-node dist/cli.js ./src --volume-config vol.yaml # monthly cost projection
-node dist/cli.js ./src --no-gitignore           # scan gitignored files too
+npx promptscan ./src
 ```
 
-**Volume config** (`vol.yaml`) for monthly projections:
+## Quick start
 
-```yaml
-default: 1000            # calls/month applied to every call site
-sites:
-  "src/agents/support.py:44": 50000   # per-site override
+```bash
+promptscan ./src                          # summary table (the default)
+promptscan ./src --format json            # full structured report
+promptscan ./src --volume-config vol.yaml # add a projected monthly bill
+promptscan diff main HEAD ./src           # what changed between two commits
 ```
 
-### Configuration
-
-Thresholds can live in a project config file so they don't have to be passed every run. PromptScan auto-discovers `promptscan.config.{json,yaml,yml}` (or `.promptscanrc`) by searching the working directory and its ancestors, or takes an explicit `--config <file>`. Zero config still works — every field is optional and falls back to the built-in default. Precedence is **CLI flag > config file > default**.
-
-```yaml
-# promptscan.config.yaml
-gitignore: true
-duplicates:
-  similarity: 0.85          # near-duplicate threshold (also --similarity)
-  minWords: 5               # ignore prompts shorter than this in dup analysis
-bloat:
-  largeTokens: 2000         # "oversized prompt" threshold
-  manyMessages: 6           # "few-shot" message-count threshold
-  boilerplateMinSites: 3    # min call sites for a block to count as boilerplate
-  boilerplateMinWords: 8
-volume:                     # monthly-projection call volumes (same as --volume-config)
-  default: 1000
-  sites:
-    "src/agents/support.py:44": 50000
-```
-
-### Example output
+A run against a small example:
 
 ```
 PromptScan v1.0.0  (phase: cost)
@@ -176,28 +69,87 @@ PromptScan v1.0.0  (phase: cost)
       0.94  agent_a.py:4  ~  agent_c.py:4
 ```
 
-Output-cell markers: `~` approximate (proxy/fallback tokenizer) · `+` partial (static floor) · `—` unresolved.
+The markers in the token/cost columns mean: `~` the number is approximate (Anthropic has no public tokenizer, so it falls back to a proxy), `+` a partial prompt where only the static part could be counted, and `—` a prompt that couldn't be resolved at all.
 
-### Output formats
+## What it reports
 
-- `--format table` — human-readable terminal summary (default)
-- `--format json` — the full structured `ScanReport` for downstream tooling
+### Finding the calls
 
-The JSON output has a **published, versioned schema** at [`schema/scanreport.schema.json`](schema/scanreport.schema.json) (JSON Schema draft 2020-12). Every report carries `meta.schemaVersion` (currently `"1.0"`), independent of the tool's package version. The contract: additive, backward-compatible changes keep `schemaVersion` the same; a breaking change (removing/renaming a field or changing its type) bumps it. A test validates real output against the schema on every run, so the two can't drift.
+PromptScan parses each file with tree-sitter and looks for the call shapes below.
 
----
+| Provider / framework | What it matches |
+|---|---|
+| OpenAI | `chat.completions.create` / `.parse` / `.stream`, `responses.create` / `.parse` / `.stream` |
+| Anthropic | `messages.create` / `.stream` |
+| LangChain | `ChatOpenAI` / `ChatAnthropic` / `AzureChatOpenAI`, invoked with `.invoke` / `.stream` / `.batch` |
 
-## CI — catch cost regressions on a PR
+Matching on the method name alone isn't enough, because `client.messages.create(...)` is also Twilio's SMS API. So a match has to be backed up by something: an SDK import in the file (`import openai`, `import { Anthropic } from "@anthropic-ai/sdk"`, `require("openai")`), or a variable bound to a client constructor (`client = openai.OpenAI()`, `new OpenAI()`). Long chains like `chat.completions.create` are distinctive enough to stand on their own; the short, ambiguous ones need the corroboration or they're dropped. When a call is only reported at medium confidence, the table says why.
 
-`promptscan diff` compares two git refs and reports what changed — the token/cost
-delta, plus prompts that were added or removed (with a near-duplicate hint when a
-new prompt looks like an existing one). It fetches each ref via `git archive`, so
-it never touches your working tree.
+LangChain works differently, because there the model and provider come from the constructor (`ChatOpenAI(model="gpt-4o")`) and the actual call is a generic `.invoke()` later on. PromptScan tracks the binding, including through a chain (`chain = prompt | model` in Python, `prompt.pipe(model)` in JS), and only treats `.invoke` as a call site when its receiver is a known model. A string passed straight to `invoke(...)` resolves; a prompt sitting in a `ChatPromptTemplate` is reported as unresolved.
+
+### Resolving the prompt text
+
+Once it has a call site, PromptScan follows the prompt argument back to where the text comes from:
+
+- string literals and `+` / adjacent concatenation resolve directly
+- module constants and single-assignment variables resolve through a symbol table
+- f-strings (Python) and template literals (JS/TS) resolve partially: the static text is kept and the interpolations are flagged
+- static file reads like `open("p.txt").read()`, `Path("p.md").read_text()`, and `readFileSync("p.txt")` are resolved by reading the file
+- anything else (a function parameter, a reassigned variable, a value from a DB call) is reported as unresolved, with a short reason
+
+The unresolved and partial counts are shown up front, not buried, and each unresolved prompt is listed with its reason. If a report quietly skipped half your prompts it wouldn't be worth much.
+
+### Tokens and cost
+
+Resolved prompts are tokenized and reported as input tokens, including the small per-message overhead that OpenAI documents. OpenAI uses `js-tiktoken` with the right encoding for the model. Anthropic doesn't publish its tokenizer, so those counts use a `cl100k` proxy and are marked approximate.
+
+Output tokens can't be known from the source, so PromptScan never reports them; the numbers are always input-only. Cost comes from a bundled pricing table stamped with an as-of date. If a model isn't in the table it's reported as unpriced and left out of the totals rather than guessed at. Pass `--volume-config` and it will multiply through to a monthly figure.
+
+### Duplicates, dead prompts, and bloat
+
+Beyond per-call numbers, a scan surfaces a few patterns worth cleaning up:
+
+- **Duplicates.** Prompts that are byte-identical across call sites (with a wasted-token tally), plus near-duplicates found by token-set Jaccard similarity above a threshold (0.85 by default). The near ones are usually the interesting case, where a copy-pasted prompt drifted in one place but not the others.
+- **Dead prompts.** A prompt-shaped string constant that nothing references anywhere in the scan. This one is deliberately cautious: it only fires when the name never appears as a reference in any file, never shows up inside a string literal (which covers `__all__`, `getattr`, and similar dynamic access), and the value is a module-level, fully static, six-plus-word string. It's a heuristic, reported on its own, and it can't see reflection or a library prompt that outside code imports, so verify before deleting.
+- **Context bloat.** Three heuristics: a single prompt over a token threshold, a prompt with a lot of message parts (a possible pile of few-shot examples), and a block of text repeated verbatim across several call sites. That last one is the part-level version of duplicate detection, so it catches a shared system prompt across calls whose user turns differ, which is a good candidate to extract or cache.
+
+## Configuration
+
+Thresholds can live in a config file so you don't have to pass them every run. PromptScan looks for `promptscan.config.{json,yaml,yml}` (or `.promptscanrc`) in the working directory and its ancestors, or you can point at one with `--config`. Everything is optional and falls back to a sane default, and a CLI flag always wins over the file.
+
+```yaml
+# promptscan.config.yaml
+gitignore: true
+duplicates:
+  similarity: 0.85          # near-duplicate threshold (also --similarity)
+  minWords: 5               # ignore very short prompts in duplicate analysis
+bloat:
+  largeTokens: 2000         # "oversized prompt" threshold
+  manyMessages: 6           # "few-shot" message-count threshold
+  boilerplateMinSites: 3    # min call sites for a block to count as boilerplate
+  boilerplateMinWords: 8
+volume:                     # monthly-projection call volumes (same as --volume-config)
+  default: 1000
+  sites:
+    "src/agents/support.py:44": 50000
+```
+
+The volume file for `--volume-config` is the `volume:` block on its own:
+
+```yaml
+default: 1000
+sites:
+  "src/agents/support.py:44": 50000
+```
+
+## Catching cost regressions on a PR
+
+`promptscan diff` compares two git refs and reports the change: the token and cost delta, and any prompts that were added or removed. When a new prompt looks like one that already exists, it says so. It reads each ref with `git archive`, so it never touches your working tree.
 
 ```bash
-node dist/cli.js diff main HEAD ./src            # human-readable
-node dist/cli.js diff main HEAD ./src --format markdown   # for a PR comment
-node dist/cli.js diff main HEAD ./src --fail-on-increase 5   # exit 1 if tokens grow >5%
+promptscan diff main HEAD ./src                     # human-readable
+promptscan diff main HEAD ./src --format markdown   # for a PR comment
+promptscan diff main HEAD ./src --fail-on-increase 5   # exit 1 if tokens grow >5%
 ```
 
 ```
@@ -211,17 +163,13 @@ PromptScan diff
     b.py:3 — +24 tokens ($0.00006) · near-duplicate of a.py:3 (0.88)
 ```
 
-`--fail-on-increase <pct>` gates on `--metric tokens` (default) or `--metric cost`.
+`--fail-on-increase <pct>` gates on tokens by default, or on cost with `--metric cost`.
 
-### GitHub Action
-
-The repo ships a composite action ([`action.yml`](action.yml)) that runs the diff
-against a PR's base branch, posts/updates a PR comment, and fails the check on an
-increase. A ready-to-copy workflow is in [`examples/github-workflow.yml`](examples/github-workflow.yml):
+There's a GitHub Action in [`action.yml`](action.yml) that runs the diff against a PR's base branch, posts (or updates) a comment, and fails the check on an increase. A copy-paste workflow lives in [`examples/github-workflow.yml`](examples/github-workflow.yml):
 
 ```yaml
 - uses: actions/checkout@v4
-  with: { fetch-depth: 0 } # both refs must be present
+  with: { fetch-depth: 0 } # both refs have to be present for the diff
 - uses: joandino/promptscan@v1
   with:
     path: ./src
@@ -229,87 +177,45 @@ increase. A ready-to-copy workflow is in [`examples/github-workflow.yml`](exampl
     metric: tokens
 ```
 
-> The Action is provided as the intended v0.4 integration but hasn't been exercised
-> in a live CI run yet, and points at `npx promptscan@latest` (override via the
-> `command` input until the package is published).
+The Action is written and its YAML is valid, but it hasn't been run in a live workflow yet, so treat it as a starting point rather than a guarantee.
 
----
+## JSON output
 
-## Design principles
+`--format json` prints the full report. It has a versioned schema at [`schema/scanreport.schema.json`](schema/scanreport.schema.json) (JSON Schema draft 2020-12), and every report includes a `meta.schemaVersion` that's separate from the package version. Additive, backward-compatible changes leave it alone; a breaking change bumps it. A test validates real output against the schema on every run, so the schema and the code can't quietly drift apart.
 
-1. **Never claim what you can't verify.** Every number traces to something countable in the source.
-2. **Report unknowns loudly.** Unresolved prompts and unpriced models are headline figures, not footnotes.
-3. **False positives are the failure mode.** A wrong dead-prompt or false detection gets the tool uninstalled — the gates are tuned accordingly.
-4. **Zero configuration to first result.** Point it at a directory; it works.
-5. **Estimates are labeled as estimates.** Always — token counts, costs, and Anthropic's proxy tokenizer all say so.
+## What it deliberately doesn't do
 
----
+- It doesn't judge prompt quality or say one prompt is better than another.
+- It doesn't recommend a cheaper model, because that needs a quality measurement it doesn't have.
+- It doesn't do runtime tracing. That's a different kind of tool.
 
-## Validation
+## How it holds up on real code
 
-v0.1 was validated against three real repos — `openai/openai-python`, `anthropics/anthropic-sdk-python`, `openai/swarm` (**2,932 Python files**):
-
-- **No crashes**, all files parsed, < 2s per repo.
-- **99.2% detection recall** (237 / 239 real call sites), **100% precision** (zero false positives).
-- Every gap classified: docstrings, non-LLM APIs (Twilio, Assistants `threads.messages.create`), or 2 deliberate misses inside the Anthropic SDK's own internals.
-
-Full methodology and the Twilio tradeoff writeup: [VALIDATION.md](VALIDATION.md).
+The detection was checked against three real repositories (`openai/openai-python`, `anthropics/anthropic-sdk-python`, `openai/swarm`), 2,932 Python files in all. No crashes, everything parsed, under two seconds per repo. It found 237 of the 239 real call sites a human reviewer would flag (99.2%) with no false positives. Every gap was accounted for: docstrings, non-LLM APIs like Twilio and the Assistants `threads.messages.create`, and two calls buried inside the Anthropic SDK's own internals. The write-up, including why those two are left alone on purpose, is in [VALIDATION.md](VALIDATION.md).
 
 ## Known limitations
 
-- **Dead-prompt detection is a heuristic** — it can't see runtime reflection, and a library's public prompt consumed by external code will look unused. Verify before deleting.
-- **Provider SDK internals**: a call on an attribute receiver (`self._client.messages.create`) in a file that doesn't import the SDK by name isn't detected — confined to code living *inside* a provider package.
-- **Cross-module constants** (`from other import PROMPT`) and non-literal file paths report unresolved rather than guess.
-- **Pricing drifts.** The table is a single bundled file stamped with an as-of date; OpenAI prices are listed rates — verify before relying on them.
+- Dead-prompt detection is a heuristic. It can't see runtime reflection, and a prompt a library exports for others to import will look unused. Verify before deleting.
+- A call on an attribute receiver like `self._client.messages.create` in a file that doesn't import the SDK by name won't be detected. In practice this only happens inside a provider's own package.
+- Cross-module constants (`from other import PROMPT`) and non-literal file paths are reported as unresolved rather than guessed.
+- Prices drift. The pricing table is one bundled file with an as-of date, and the OpenAI figures are list prices. Check them before you rely on the dollar numbers.
 
-## Explicit non-goals
-
-- **No quality evaluation.** PromptScan never claims a prompt is better or worse.
-- **No model-substitution advice.** That requires quality measurement.
-- **No runtime tracing.** Different tool, different architecture.
-
----
-
-## Roadmap
-
-| Phase | Scope | Status |
-|---|---|---|
-| **v0.1** | Python + OpenAI/Anthropic detection, prompt resolution, token counts, table output | ✅ done, validated |
-| — | `.stream()` / `.parse()` call variants | ✅ done |
-| **v0.2** | Exact + near-duplicate detection, JSON output | ✅ done |
-| **v0.3** | Versioned pricing table, per-call + monthly cost | ✅ done |
-| **v0.4** | `diff` command, GitHub Action, PR comments, fail-on-increase | ✅ done |
-| **v0.5** | TypeScript/JavaScript support, LangChain patterns, dead-prompt detection | ✅ done |
-| **v1.0** | Context-bloat heuristics, config file, stable JSON schema | ✅ done |
-
----
-
-## Stack
-
-| Concern | Choice |
-|---|---|
-| CLI | TypeScript / Node |
-| Parsing | `web-tree-sitter` (WASM) + `tree-sitter-python` / `-typescript` / `-tsx` — portable via npx, error-tolerant |
-| Tokenization | `js-tiktoken` (OpenAI); `cl100k` proxy for Anthropic |
-| Similarity | Token-set Jaccard |
-| Output | `cli-table3`, JSON |
-| Config | `yaml` (volume config) |
-
-Tree-sitter over language-native ASTs so every language goes through one interface, and so partial/broken files still parse.
-
----
-
-## Development
+## Building from source
 
 ```bash
+git clone https://github.com/joandino/promptscan.git
+cd promptscan
 npm install
-npm run build        # compile to dist/
-npm test             # run the test suite (node --test via tsx)
-npm run typecheck    # tsc --noEmit
-npm run dev -- ./src # run the CLI without building
+npm run build          # compile to dist/
+npm test               # run the suite (node --test via tsx)
+npm run dev -- ./src   # run the CLI without building
 ```
 
-Tests are fixture-driven — small Python and TypeScript/JavaScript inputs under `test/fixtures/` exercise every detection, resolution, tokenization, cost, duplicate, and diff case.
+Tests are fixture-driven: small Python and TypeScript/JavaScript files under `test/fixtures/` cover every detection, resolution, token, cost, duplicate, and diff case.
+
+## Under the hood
+
+The CLI is TypeScript on Node. Parsing goes through `web-tree-sitter` (the WASM build, so it installs cleanly over npx and tolerates broken files) with the Python, TypeScript, and TSX grammars, which lets all three languages share one code path. Tokenization is `js-tiktoken` for OpenAI and a `cl100k` proxy for Anthropic. Similarity is token-set Jaccard, and the terminal tables are `cli-table3`.
 
 ## License
 
