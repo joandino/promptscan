@@ -88,11 +88,16 @@ exactly (e.g. `google_cloud.py:31` → model `claude-haiku-4-5`, user `"Hello!"`
 - **Provider SDK internals**: calls on an attribute receiver
   (`self._client.messages.create`) in a file that does not import the SDK by
   name are not detected. Confined to code living _inside_ a provider package.
-- **`.stream()` / `.parse()`**: streaming context managers and structured-output
-  `parse()` calls are not yet targeted (44 `messages.stream`, 18 `chat.completions.parse`,
-  24 `*.stream` seen across the SDKs). Candidates for a future milestone.
 - Documented already: cross-module constants, `Path` _variables_, and raw
   escape-sequence counting.
+
+### Post-validation follow-up
+
+The `.stream()` / `.parse()` gap flagged here has since been **closed**: those
+variants are now detected (they share the create argument shape). Re-running the
+subjects: anthropic-sdk 161 → 199 (+38 `messages.stream`), openai-python
+70 → 107 (+37 `chat.completions.stream` / `.parse` / `responses.stream`), swarm
+unchanged. Twilio's `client.messages.stream()` is correctly still excluded.
 
 ## Verdict
 
