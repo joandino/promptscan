@@ -69,6 +69,10 @@ function renderCallSites(report: ScanReport): string {
   lines.push(
     `  Models:     ${stats.modelsResolved} resolved, ${unresolvedModels} unresolved`,
   );
+  lines.push(
+    `  Prompts:    ${stats.promptsResolved} resolved, ` +
+      `${stats.promptsPartial} partial, ${stats.promptsUnresolved} unresolved`,
+  );
   lines.push('');
   lines.push(
     renderCallSiteTable(callSites)
@@ -76,6 +80,16 @@ function renderCallSites(report: ScanReport): string {
       .map((l) => `  ${l}`)
       .join('\n'),
   );
+
+  const notFull = callSites.filter((c) => c.prompt.status !== 'resolved');
+  if (notFull.length > 0) {
+    lines.push('');
+    lines.push('  Prompts needing attention:');
+    for (const c of notFull) {
+      const reason = c.prompt.reason ?? 'see call site';
+      lines.push(`    ${c.file}:${c.line} — ${c.prompt.status}: ${reason}`);
+    }
+  }
 
   return lines.join('\n');
 }

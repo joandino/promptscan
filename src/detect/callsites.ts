@@ -1,6 +1,9 @@
+import path from 'node:path';
 import type { Node, Tree, Language } from 'web-tree-sitter';
 import { getDetectionQueries } from '../parse/queries.js';
 import { buildModuleContext, type ModuleContext, type Provider } from './providers.js';
+import { buildSymbolTable } from '../resolve/symbols.js';
+import { resolvePrompt } from '../resolve/resolver.js';
 import type { CallSite, Confidence, MatchBasis } from '../report/types.js';
 
 /** Attribute-chain suffix → provider/method. Ordered longest (most specific) first. */
@@ -92,15 +95,19 @@ function classify(chain: string, receiver: string | null, ctx: ModuleContext): C
 }
 
 /**
- * Detect OpenAI/Anthropic call sites in a parsed Python module.
- * `relPath` is used verbatim as the reported file path.
+ * Detect OpenAI/Anthropic call sites in a parsed Python module and resolve
+ * each prompt. `relPath` is the reported file path; `absPath` is used to
+ * resolve relative prompt-file loads.
  */
 export function detectCallSites(
   tree: Tree,
   language: Language,
   relPath: string,
+  absPath: string,
 ): CallSite[] {
   const ctx = buildModuleContext(tree, language);
+  const symbols = buildSymbolTable(tree, language);
+  const resolveCtx = { symbols, sourceDir: path.dirname(absPath) };
   const { attributeCalls } = getDetectionQueries(language);
 
   const sites: CallSite[] = [];
@@ -118,6 +125,7 @@ export function detectCallSites(
     if (!result) continue;
 
     const { model, hint } = extractModel(node);
+    const prompt = resolvePrompt(node, result.method, resolveCtx);
     const pos = node.startPosition;
     sites.push({
       file: relPath,
@@ -131,6 +139,7 @@ export function detectCallSites(
       receiver,
       confidence: result.confidence,
       basis: result.basis,
+      prompt,
     });
   }
 
