@@ -12,6 +12,7 @@ import {
 import { detectCallSites } from './detect/callsites.js';
 import { detectTsCallSites } from './lang/typescript.js';
 import { findDuplicates, type DuplicateOptions } from './analyze/duplicates.js';
+import { collectDeadPromptFile, aggregateDeadPrompts, type DeadPromptFile } from './analyze/deadprompts.js';
 import { projectMonthly, type VolumeConfig } from './pricing/cost.js';
 import { PRICING_VERSION, PRICING_AS_OF } from './pricing/table.js';
 import { VERSION } from './version.js';
@@ -62,7 +63,9 @@ export async function scan(target: string, opts: ScanOptions = {}): Promise<Scan
     nearDuplicatePairs: 0,
     inputCostUsd: 0,
     unpricedCallSites: 0,
+    deadPrompts: 0,
   };
+  const deadData: DeadPromptFile[] = [];
 
   for (const absPath of files) {
     const relPath = path.relative(root, absPath) || path.basename(absPath);
@@ -87,6 +90,8 @@ export async function scan(target: string, opts: ScanOptions = {}): Promise<Scan
 
     // Detection runs on partial trees too — tree-sitter recovers enough.
     const language = getLanguage(lang);
+    deadData.push(collectDeadPromptFile(outcome.tree, language, lang, relPath));
+
     const detected =
       lang === 'python'
         ? detectCallSites(outcome.tree, language, relPath, absPath)
@@ -118,6 +123,9 @@ export async function scan(target: string, opts: ScanOptions = {}): Promise<Scan
   stats.exactDuplicateGroups = duplicates.exact.length;
   stats.nearDuplicatePairs = duplicates.near.length;
 
+  const deadPrompts = aggregateDeadPrompts(deadData);
+  stats.deadPrompts = deadPrompts.length;
+
   const projection = opts.volume ? projectMonthly(callSites, opts.volume) : null;
 
   return {
@@ -125,6 +133,7 @@ export async function scan(target: string, opts: ScanOptions = {}): Promise<Scan
     files: summaries,
     callSites,
     duplicates,
+    deadPrompts,
     projection,
     stats,
     meta: {
