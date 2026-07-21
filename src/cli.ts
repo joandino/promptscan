@@ -2,6 +2,8 @@
 import { Command } from 'commander';
 import { scan } from './index.js';
 import { renderScanSummary } from './report/render.js';
+import { loadVolumeConfig } from './pricing/volume.js';
+import type { VolumeConfig } from './pricing/cost.js';
 import { VERSION } from './version.js';
 
 const program = new Command();
@@ -15,11 +17,12 @@ program
   .argument('<path>', 'file or directory to scan')
   .option('--format <format>', 'output format: table | json', 'table')
   .option('--similarity <n>', 'near-duplicate threshold, 0..1', '0.85')
+  .option('--volume-config <file>', 'YAML/JSON call-volume estimate for monthly cost projection')
   .option('--no-gitignore', 'do not respect .gitignore files under the target')
   .action(
     async (
       target: string,
-      options: { format: string; similarity: string; gitignore: boolean },
+      options: { format: string; similarity: string; volumeConfig?: string; gitignore: boolean },
     ) => {
       if (options.format !== 'table' && options.format !== 'json') {
         console.error(`promptscan: unsupported --format '${options.format}' (supported: table, json)`);
@@ -34,8 +37,19 @@ program
         return;
       }
 
+      let volume: VolumeConfig | undefined;
+      if (options.volumeConfig) {
+        try {
+          volume = loadVolumeConfig(options.volumeConfig);
+        } catch (err) {
+          console.error(`promptscan: ${err instanceof Error ? err.message : String(err)}`);
+          process.exitCode = 2;
+          return;
+        }
+      }
+
       try {
-        const report = await scan(target, { gitignore: options.gitignore, threshold });
+        const report = await scan(target, { gitignore: options.gitignore, threshold, volume });
         if (options.format === 'json') {
           process.stdout.write(JSON.stringify(report, null, 2) + '\n');
         } else {

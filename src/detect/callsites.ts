@@ -5,6 +5,7 @@ import { buildModuleContext, type ModuleContext, type Provider } from './provide
 import { buildSymbolTable } from '../resolve/symbols.js';
 import { resolvePrompt, type ArgStyle } from '../resolve/resolver.js';
 import { estimateTokens } from '../tokens/tokenizer.js';
+import { estimateCost } from '../pricing/cost.js';
 import type { CallSite, Confidence, MatchBasis } from '../report/types.js';
 
 interface MethodPattern {
@@ -142,6 +143,7 @@ export function detectCallSites(
     const { model, hint } = extractModel(node);
     const prompt = resolvePrompt(node, result.argStyle, resolveCtx);
     const tokens = estimateTokens(result.provider, model, prompt);
+    const cost = estimateCost(result.provider, model, tokens.inputTokens);
     const pos = node.startPosition;
     sites.push({
       file: relPath,
@@ -157,6 +159,7 @@ export function detectCallSites(
       basis: result.basis,
       prompt,
       tokens,
+      cost,
     });
   }
 

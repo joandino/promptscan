@@ -25,6 +25,21 @@ function tokenCell(site: CallSite): string {
   return `${prefix}${site.tokens.inputTokens.toLocaleString('en-US')}${suffix}`;
 }
 
+/** Format a USD amount with enough precision for sub-cent per-call costs. */
+export function formatUsd(n: number): string {
+  if (n === 0) return '$0';
+  if (n < 0.01) return `$${n.toFixed(5)}`;
+  if (n < 1) return `$${n.toFixed(4)}`;
+  return `$${n.toFixed(2)}`;
+}
+
+function costCell(site: CallSite): string {
+  if (site.prompt.status === 'unresolved') return '—';
+  if (site.cost.inputCostUsd === null) return 'unpriced';
+  const prefix = site.tokens.approximate ? '~' : '';
+  return `${prefix}${formatUsd(site.cost.inputCostUsd)}`;
+}
+
 /** Whether the table needs its marker legend (any non-exact token cell). */
 function needsLegend(callSites: CallSite[]): boolean {
   return callSites.some((s) => s.prompt.status !== 'resolved' || s.tokens.approximate);
@@ -33,9 +48,9 @@ function needsLegend(callSites: CallSite[]): boolean {
 /** Render detected call sites as a plain (color-free) terminal table. */
 export function renderCallSiteTable(callSites: CallSite[]): string {
   const table = new Table({
-    head: ['Location', 'Provider', 'Model', 'Input tok', 'Confidence'],
+    head: ['Location', 'Provider', 'Model', 'Input tok', 'Input $', 'Confidence'],
     style: { head: [], border: [] },
-    colAligns: ['left', 'left', 'left', 'right', 'left'],
+    colAligns: ['left', 'left', 'left', 'right', 'right', 'left'],
   });
 
   for (const site of callSites) {
@@ -44,6 +59,7 @@ export function renderCallSiteTable(callSites: CallSite[]): string {
       site.provider,
       modelCell(site),
       tokenCell(site),
+      costCell(site),
       confidenceCell(site),
     ]);
   }

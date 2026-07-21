@@ -77,6 +77,20 @@ export interface TokenEstimate {
   notes: string[];
 }
 
+/**
+ * Static estimate of a call site's INPUT cost (USD), from token count ×
+ * per-model pricing. Output cost is never included — output tokens aren't
+ * statically knowable.
+ */
+export interface CostEstimate {
+  /** Input cost of one call, or null when the model isn't in the pricing table. */
+  inputCostUsd: number | null;
+  /** Input price per 1M tokens used, or null when unpriced. */
+  pricePerMTok: number | null;
+  /** Canonical model id the price came from, or null when unpriced. */
+  pricedAs: string | null;
+}
+
 export interface CallSite {
   /** Path relative to the scan root. */
   file: string;
@@ -98,6 +112,25 @@ export interface CallSite {
   prompt: ResolvedPrompt;
   /** Input-token estimate for the resolved prompt (M4). */
   tokens: TokenEstimate;
+  /** Input-cost estimate for the resolved prompt (v0.3). */
+  cost: CostEstimate;
+}
+
+/** Per-site monthly projection, when a call-volume estimate is supplied. */
+export interface MonthlyProjectionSite {
+  file: string;
+  line: number;
+  callsPerMonth: number;
+  /** callsPerMonth × per-call input cost, or null when unpriced. */
+  monthlyInputCostUsd: number | null;
+}
+
+export interface MonthlyProjection {
+  monthlyInputTokens: number;
+  monthlyInputCostUsd: number;
+  /** Call sites whose model isn't priced (excluded from the cost total). */
+  unpriced: number;
+  sites: MonthlyProjectionSite[];
 }
 
 export interface FileParseSummary {
@@ -131,6 +164,10 @@ export interface ScanStats {
   exactDuplicateGroups: number;
   /** Number of near-duplicate pairs. */
   nearDuplicatePairs: number;
+  /** Total estimated input cost (USD) across priced call sites. */
+  inputCostUsd: number;
+  /** Call sites whose model has no pricing-table entry. */
+  unpricedCallSites: number;
 }
 
 /** A call-site location, for referencing from duplicate reports. */
@@ -174,10 +211,15 @@ export interface ScanReport {
   files: FileParseSummary[];
   callSites: CallSite[];
   duplicates: DuplicateReport;
+  /** Monthly cost projection, present only when a volume estimate is supplied. */
+  projection: MonthlyProjection | null;
   stats: ScanStats;
   meta: {
     version: string;
     /** Current roadmap phase implemented by this build. */
     phase: string;
+    /** Pricing-table version and as-of date behind the cost figures. */
+    pricingVersion: string;
+    pricingAsOf: string;
   };
 }
