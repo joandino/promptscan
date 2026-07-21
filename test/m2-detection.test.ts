@@ -24,6 +24,13 @@ test('rejects short chains with no import and no binding (no false positives)', 
   assert.equal(byFile(callSites, 'false_positive.py'), undefined);
 });
 
+test('does not flag Twilio client.messages.create as an Anthropic call', async () => {
+  // `client.messages.create()` is Twilio's SMS API; the anthropic gate exists
+  // precisely to avoid this false positive (see VALIDATION.md).
+  const { callSites } = await scan(detectRepo);
+  assert.equal(byFile(callSites, 'twilio_like.py'), undefined);
+});
+
 test('binds client variables through direct, aliased, and from-imports', async () => {
   const { callSites } = await scan(detectRepo);
   assert.equal(byFile(callSites, 'openai_basic.py')?.basis, 'binding'); // openai.OpenAI()
