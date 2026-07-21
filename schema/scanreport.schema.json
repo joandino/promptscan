@@ -1,0 +1,288 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://promptscan.dev/schema/scanreport.schema.json",
+  "title": "PromptScan ScanReport",
+  "description": "The `--format json` output of `promptscan scan`. schemaVersion 1.0.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["root", "files", "callSites", "duplicates", "deadPrompts", "bloat", "projection", "stats", "meta"],
+  "properties": {
+    "root": { "type": "string" },
+    "files": { "type": "array", "items": { "$ref": "#/$defs/FileParseSummary" } },
+    "callSites": { "type": "array", "items": { "$ref": "#/$defs/CallSite" } },
+    "duplicates": { "$ref": "#/$defs/DuplicateReport" },
+    "deadPrompts": { "type": "array", "items": { "$ref": "#/$defs/DeadPrompt" } },
+    "bloat": { "$ref": "#/$defs/BloatReport" },
+    "projection": {
+      "anyOf": [{ "$ref": "#/$defs/MonthlyProjection" }, { "type": "null" }]
+    },
+    "stats": { "$ref": "#/$defs/ScanStats" },
+    "meta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "phase", "pricingVersion", "pricingAsOf", "schemaVersion"],
+      "properties": {
+        "version": { "type": "string" },
+        "phase": { "type": "string" },
+        "pricingVersion": { "type": "string" },
+        "pricingAsOf": { "type": "string" },
+        "schemaVersion": { "const": "1.0" }
+      }
+    }
+  },
+  "$defs": {
+    "SiteRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file", "line"],
+      "properties": {
+        "file": { "type": "string" },
+        "line": { "type": "integer" }
+      }
+    },
+    "FileParseSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["relPath", "status"],
+      "properties": {
+        "relPath": { "type": "string" },
+        "status": { "enum": ["clean", "partial", "read-error"] },
+        "message": { "type": "string" }
+      }
+    },
+    "PromptSegment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "text"],
+      "properties": {
+        "kind": { "enum": ["static", "dynamic"] },
+        "text": { "type": "string" }
+      }
+    },
+    "ResolvedValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "text", "segments", "source"],
+      "properties": {
+        "status": { "enum": ["resolved", "partial", "unresolved"] },
+        "text": { "type": "string" },
+        "segments": { "type": "array", "items": { "$ref": "#/$defs/PromptSegment" } },
+        "source": { "enum": ["literal", "concat", "fstring", "const", "file", "unknown"] },
+        "reason": { "type": "string" }
+      }
+    },
+    "PromptPart": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "origin", "value"],
+      "properties": {
+        "role": { "type": ["string", "null"] },
+        "origin": { "enum": ["messages", "system", "input", "instructions", "prompt"] },
+        "value": { "$ref": "#/$defs/ResolvedValue" }
+      }
+    },
+    "ResolvedPrompt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "parts"],
+      "properties": {
+        "status": { "enum": ["resolved", "partial", "unresolved"] },
+        "parts": { "type": "array", "items": { "$ref": "#/$defs/PromptPart" } },
+        "reason": { "type": "string" }
+      }
+    },
+    "TokenEstimate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contentTokens", "overheadTokens", "inputTokens", "approximate", "encoding", "notes"],
+      "properties": {
+        "contentTokens": { "type": "integer" },
+        "overheadTokens": { "type": "integer" },
+        "inputTokens": { "type": "integer" },
+        "approximate": { "type": "boolean" },
+        "encoding": { "type": "string" },
+        "notes": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "CostEstimate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["inputCostUsd", "pricePerMTok", "pricedAs"],
+      "properties": {
+        "inputCostUsd": { "type": ["number", "null"] },
+        "pricePerMTok": { "type": ["number", "null"] },
+        "pricedAs": { "type": ["string", "null"] }
+      }
+    },
+    "CallSite": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "file", "line", "column", "provider", "method", "model", "modelResolved",
+        "modelHint", "receiver", "confidence", "basis", "prompt", "tokens", "cost"
+      ],
+      "properties": {
+        "file": { "type": "string" },
+        "line": { "type": "integer" },
+        "column": { "type": "integer" },
+        "provider": { "enum": ["openai", "anthropic"] },
+        "method": { "type": "string" },
+        "model": { "type": ["string", "null"] },
+        "modelResolved": { "type": "boolean" },
+        "modelHint": { "type": ["string", "null"] },
+        "receiver": { "type": ["string", "null"] },
+        "confidence": { "enum": ["high", "medium"] },
+        "basis": { "enum": ["shape", "import", "binding"] },
+        "prompt": { "$ref": "#/$defs/ResolvedPrompt" },
+        "tokens": { "$ref": "#/$defs/TokenEstimate" },
+        "cost": { "$ref": "#/$defs/CostEstimate" }
+      }
+    },
+    "DuplicateGroup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["text", "tokens", "sites"],
+      "properties": {
+        "text": { "type": "string" },
+        "tokens": { "type": "integer" },
+        "sites": { "type": "array", "items": { "$ref": "#/$defs/SiteRef" } }
+      }
+    },
+    "NearDuplicatePair": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["similarity", "a", "b"],
+      "properties": {
+        "similarity": { "type": "number" },
+        "a": { "$ref": "#/$defs/SiteRef" },
+        "b": { "$ref": "#/$defs/SiteRef" }
+      }
+    },
+    "DuplicateReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["exact", "near", "threshold", "minWords", "comparedPrompts"],
+      "properties": {
+        "exact": { "type": "array", "items": { "$ref": "#/$defs/DuplicateGroup" } },
+        "near": { "type": "array", "items": { "$ref": "#/$defs/NearDuplicatePair" } },
+        "threshold": { "type": "number" },
+        "minWords": { "type": "integer" },
+        "comparedPrompts": { "type": "integer" },
+        "nearNote": { "type": "string" }
+      }
+    },
+    "DeadPrompt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file", "line", "name", "tokens"],
+      "properties": {
+        "file": { "type": "string" },
+        "line": { "type": "integer" },
+        "name": { "type": "string" },
+        "tokens": { "type": "integer" }
+      }
+    },
+    "OversizedPrompt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file", "line", "tokens"],
+      "properties": {
+        "file": { "type": "string" },
+        "line": { "type": "integer" },
+        "tokens": { "type": "integer" }
+      }
+    },
+    "FewShotPrompt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file", "line", "messageCount", "tokens"],
+      "properties": {
+        "file": { "type": "string" },
+        "line": { "type": "integer" },
+        "messageCount": { "type": "integer" },
+        "tokens": { "type": "integer" }
+      }
+    },
+    "BoilerplateBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["text", "tokens", "sites"],
+      "properties": {
+        "text": { "type": "string" },
+        "tokens": { "type": "integer" },
+        "sites": { "type": "array", "items": { "$ref": "#/$defs/SiteRef" } }
+      }
+    },
+    "BloatReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["oversized", "fewShot", "boilerplate", "thresholds"],
+      "properties": {
+        "oversized": { "type": "array", "items": { "$ref": "#/$defs/OversizedPrompt" } },
+        "fewShot": { "type": "array", "items": { "$ref": "#/$defs/FewShotPrompt" } },
+        "boilerplate": { "type": "array", "items": { "$ref": "#/$defs/BoilerplateBlock" } },
+        "thresholds": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["largeTokens", "manyMessages", "boilerplateMinSites"],
+          "properties": {
+            "largeTokens": { "type": "integer" },
+            "manyMessages": { "type": "integer" },
+            "boilerplateMinSites": { "type": "integer" }
+          }
+        }
+      }
+    },
+    "MonthlyProjectionSite": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file", "line", "callsPerMonth", "monthlyInputCostUsd"],
+      "properties": {
+        "file": { "type": "string" },
+        "line": { "type": "integer" },
+        "callsPerMonth": { "type": "integer" },
+        "monthlyInputCostUsd": { "type": ["number", "null"] }
+      }
+    },
+    "MonthlyProjection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["monthlyInputTokens", "monthlyInputCostUsd", "unpriced", "sites"],
+      "properties": {
+        "monthlyInputTokens": { "type": "integer" },
+        "monthlyInputCostUsd": { "type": "number" },
+        "unpriced": { "type": "integer" },
+        "sites": { "type": "array", "items": { "$ref": "#/$defs/MonthlyProjectionSite" } }
+      }
+    },
+    "ScanStats": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "discovered", "parsedClean", "parsedPartial", "readErrors", "callSites",
+        "modelsResolved", "promptsResolved", "promptsPartial", "promptsUnresolved",
+        "inputTokens", "tokensApproximate", "exactDuplicateGroups", "nearDuplicatePairs",
+        "inputCostUsd", "unpricedCallSites", "deadPrompts", "bloatFlags"
+      ],
+      "properties": {
+        "discovered": { "type": "integer" },
+        "parsedClean": { "type": "integer" },
+        "parsedPartial": { "type": "integer" },
+        "readErrors": { "type": "integer" },
+        "callSites": { "type": "integer" },
+        "modelsResolved": { "type": "integer" },
+        "promptsResolved": { "type": "integer" },
+        "promptsPartial": { "type": "integer" },
+        "promptsUnresolved": { "type": "integer" },
+        "inputTokens": { "type": "integer" },
+        "tokensApproximate": { "type": "boolean" },
+        "exactDuplicateGroups": { "type": "integer" },
+        "nearDuplicatePairs": { "type": "integer" },
+        "inputCostUsd": { "type": "number" },
+        "unpricedCallSites": { "type": "integer" },
+        "deadPrompts": { "type": "integer" },
+        "bloatFlags": { "type": "integer" }
+      }
+    }
+  }
+}

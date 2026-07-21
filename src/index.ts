@@ -16,6 +16,7 @@ import { collectDeadPromptFile, aggregateDeadPrompts, type DeadPromptFile } from
 import { analyzeBloat, type BloatOptions } from './analyze/bloat.js';
 import { projectMonthly, type VolumeConfig } from './pricing/cost.js';
 import { PRICING_VERSION, PRICING_AS_OF } from './pricing/table.js';
+import { SCHEMA_VERSION } from './report/schema.js';
 import { VERSION } from './version.js';
 import type { CallSite, FileParseSummary, ScanReport, ScanStats } from './report/types.js';
 
@@ -147,6 +148,7 @@ export async function scan(target: string, opts: ScanOptions = {}): Promise<Scan
       phase: 'cost',
       pricingVersion: PRICING_VERSION,
       pricingAsOf: PRICING_AS_OF,
+      schemaVersion: SCHEMA_VERSION,
     },
   };
 }
