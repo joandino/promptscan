@@ -48,9 +48,22 @@ export function renderScanSummary(report: ScanReport): string {
   lines.push(renderCallSites(report));
   const dup = renderDuplicates(report);
   if (dup) lines.push('', dup);
+  const dead = renderDeadPrompts(report);
+  if (dead) lines.push('', dead);
   const proj = renderProjection(report);
   if (proj) lines.push('', proj);
   return lines.join('\n') + '\n';
+}
+
+function renderDeadPrompts(report: ScanReport): string {
+  const dead = report.deadPrompts;
+  if (dead.length === 0) return '';
+  const lines: string[] = [];
+  lines.push(`  Possibly-unused prompts: ${dead.length} (heuristic — verify before deleting)`);
+  for (const d of dead) {
+    lines.push(`    ${d.file}:${d.line} — ${d.name} (${d.tokens} tok, no reachable reference)`);
+  }
+  return lines.join('\n');
 }
 
 function renderProjection(report: ScanReport): string {

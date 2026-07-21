@@ -168,6 +168,8 @@ export interface ScanStats {
   inputCostUsd: number;
   /** Call sites whose model has no pricing-table entry. */
   unpricedCallSites: number;
+  /** Prompt constants with no reachable reference (heuristic). */
+  deadPrompts: number;
 }
 
 /** A call-site location, for referencing from duplicate reports. */
@@ -205,12 +207,26 @@ export interface DuplicateReport {
   nearNote?: string;
 }
 
+/**
+ * A prompt-shaped string constant with no reachable reference anywhere in the
+ * scanned code. Heuristic — reported conservatively; see the analyzer.
+ */
+export interface DeadPrompt {
+  file: string;
+  line: number;
+  name: string;
+  /** Input tokens of the unused prompt text. */
+  tokens: number;
+}
+
 export interface ScanReport {
   /** Absolute path of the scan target. */
   root: string;
   files: FileParseSummary[];
   callSites: CallSite[];
   duplicates: DuplicateReport;
+  /** Prompt constants with no reachable call site (v0.5, heuristic). */
+  deadPrompts: DeadPrompt[];
   /** Monthly cost projection, present only when a volume estimate is supplied. */
   projection: MonthlyProjection | null;
   stats: ScanStats;

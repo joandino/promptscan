@@ -6,7 +6,7 @@ PromptScan scans a repository, finds every LLM API call, and reports what each o
 
 It makes no claims it can't prove. Every number comes from static analysis of your code. **"This prompt is 48 tokens and appears in three files"** is a fact. **"This cheaper model would work just as well"** is not — and PromptScan doesn't say it.
 
-> **Status:** pre-release (`v0.5.1`). **Python, TypeScript, and JavaScript** source; OpenAI, Anthropic, and LangChain. Roadmap phases v0.1–v0.4 are implemented and validated, and v0.5 multi-language + LangChain support has landed; see [Roadmap](#roadmap). Not yet published to npm — see [Local usage](#usage).
+> **Status:** pre-release (`v0.5.2`). **Python, TypeScript, and JavaScript** source; OpenAI, Anthropic, and LangChain. Roadmap phases v0.1–v0.4 are implemented and validated, and v0.5 (multi-language, LangChain, dead prompts) has landed; see [Roadmap](#roadmap). Not yet published to npm — see [Local usage](#usage).
 
 ---
 
@@ -72,6 +72,10 @@ Multiplies tokens by a **bundled, versioned pricing table** (OpenAI + Anthropic)
 - **Exact** — identical normalized prompt text across call sites, with a wasted-token tally.
 - **Near-duplicate** — token-set Jaccard similarity above a configurable threshold (default `0.85`), catching prompts that drifted apart through copy-paste edits.
 
+### 6. Dead-prompt detection (heuristic)
+
+A prompt-shaped string constant with **no reachable reference** anywhere in the scanned code. Conservative by design — flagged only when the name is never referenced in any file (imports and property accesses count), never appears inside a string literal (guards `__all__`, `getattr`, dynamic access), and the string is a module-level, fully-static, ≥6-word literal. Labeled a heuristic and reported separately: it can't see runtime reflection, and a library's public prompt consumed by external code will look unused.
+
 ---
 
 ## Usage
@@ -111,7 +115,7 @@ sites:
 ### Example output
 
 ```
-PromptScan v0.5.0  (phase: cost)
+PromptScan v0.5.2  (phase: cost)
 
   Scanned:  ./src
   Files:    4 source files
@@ -222,7 +226,7 @@ Full methodology and the Twilio tradeoff writeup: [VALIDATION.md](VALIDATION.md)
 
 ## Known limitations
 
-- **Dead-prompt detection** (prompt constants with no reachable call site) is the remaining v0.5 item, not yet implemented.
+- **Dead-prompt detection is a heuristic** — it can't see runtime reflection, and a library's public prompt consumed by external code will look unused. Verify before deleting.
 - **Provider SDK internals**: a call on an attribute receiver (`self._client.messages.create`) in a file that doesn't import the SDK by name isn't detected — confined to code living *inside* a provider package.
 - **Cross-module constants** (`from other import PROMPT`) and non-literal file paths report unresolved rather than guess.
 - **Pricing drifts.** The table is a single bundled file stamped with an as-of date; OpenAI prices are listed rates — verify before relying on them.
@@ -244,8 +248,7 @@ Full methodology and the Twilio tradeoff writeup: [VALIDATION.md](VALIDATION.md)
 | **v0.2** | Exact + near-duplicate detection, JSON output | ✅ done |
 | **v0.3** | Versioned pricing table, per-call + monthly cost | ✅ done |
 | **v0.4** | `diff` command, GitHub Action, PR comments, fail-on-increase | ✅ done |
-| **v0.5** | TypeScript/JavaScript support, LangChain patterns | ✅ done |
-| — | dead-prompt detection | planned |
+| **v0.5** | TypeScript/JavaScript support, LangChain patterns, dead-prompt detection | ✅ done |
 | **v1.0** | Context-bloat heuristics, config file, stable JSON schema | planned |
 
 ---
