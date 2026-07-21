@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
-import { scan } from './index.js';
+import { scan, type ScanOptions } from './index.js';
 import { renderScanSummary } from './report/render.js';
 import { loadVolumeConfig } from './pricing/volume.js';
-import type { VolumeConfig } from './pricing/cost.js';
+import { loadConfig, type PromptScanConfig } from './config/config.js';
 import { runDiff } from './diff/run.js';
 import { renderDiffTable, renderDiffMarkdown } from './diff/render.js';
 import { VERSION } from './version.js';
@@ -20,44 +20,83 @@ function parseThreshold(value: string): number | null {
   return Number.isFinite(n) && n >= 0 && n <= 1 ? n : null;
 }
 
+function explicit(command: Command, name: string): boolean {
+  return command.getOptionValueSource(name) === 'cli';
+}
+
+/**
+ * Merge config-file values with CLI flags into scan options.
+ * Precedence: explicit CLI flag > config file > built-in default (left unset).
+ */
+function buildScanOptions(
+  command: Command,
+  options: { similarity: string; gitignore: boolean },
+  config: PromptScanConfig,
+): ScanOptions {
+  const opts: ScanOptions = {};
+
+  if (explicit(command, 'gitignore')) opts.gitignore = options.gitignore;
+  else if (config.gitignore !== undefined) opts.gitignore = config.gitignore;
+
+  if (explicit(command, 'similarity')) opts.threshold = Number(options.similarity);
+  else if (config.duplicates?.similarity !== undefined) opts.threshold = config.duplicates.similarity;
+
+  if (config.duplicates?.minWords !== undefined) opts.minWords = config.duplicates.minWords;
+  if (config.bloat) Object.assign(opts, config.bloat);
+
+  return opts;
+}
+
 program
   .command('scan', { isDefault: true })
   .description('scan a file or directory for LLM call sites')
   .argument('<path>', 'file or directory to scan')
   .option('--format <format>', 'output format: table | json', 'table')
-  .option('--similarity <n>', 'near-duplicate threshold, 0..1', '0.85')
+  .option('--similarity <n>', 'near-duplicate threshold, 0..1 (overrides config)', '0.85')
   .option('--volume-config <file>', 'YAML/JSON call-volume estimate for monthly cost projection')
+  .option('--config <file>', 'path to a promptscan config file (else auto-discovered)')
   .option('--no-gitignore', 'do not respect .gitignore files under the target')
   .action(
     async (
       target: string,
-      options: { format: string; similarity: string; volumeConfig?: string; gitignore: boolean },
+      options: { format: string; similarity: string; volumeConfig?: string; config?: string; gitignore: boolean },
+      command: Command,
     ) => {
       if (options.format !== 'table' && options.format !== 'json') {
         console.error(`promptscan: unsupported --format '${options.format}' (supported: table, json)`);
         process.exitCode = 2;
         return;
       }
-      const threshold = parseThreshold(options.similarity);
-      if (threshold === null) {
+      if (explicit(command, 'similarity') && parseThreshold(options.similarity) === null) {
         console.error(`promptscan: --similarity must be a number in 0..1 (got '${options.similarity}')`);
         process.exitCode = 2;
         return;
       }
 
-      let volume: VolumeConfig | undefined;
-      if (options.volumeConfig) {
-        try {
-          volume = loadVolumeConfig(options.volumeConfig);
-        } catch (err) {
-          console.error(`promptscan: ${err instanceof Error ? err.message : String(err)}`);
-          process.exitCode = 2;
-          return;
-        }
+      let config: PromptScanConfig;
+      let configPath: string | null;
+      try {
+        ({ config, path: configPath } = loadConfig(options.config));
+      } catch (err) {
+        console.error(`promptscan: ${err instanceof Error ? err.message : String(err)}`);
+        process.exitCode = 2;
+        return;
+      }
+
+      const scanOptions = buildScanOptions(command, options, config);
+      try {
+        scanOptions.volume = options.volumeConfig ? loadVolumeConfig(options.volumeConfig) : config.volume;
+      } catch (err) {
+        console.error(`promptscan: ${err instanceof Error ? err.message : String(err)}`);
+        process.exitCode = 2;
+        return;
       }
 
       try {
-        const report = await scan(target, { gitignore: options.gitignore, threshold, volume });
+        const report = await scan(target, scanOptions);
+        if (configPath && options.format === 'table') {
+          console.error(`promptscan: using config ${configPath}`);
+        }
         if (options.format === 'json') {
           process.stdout.write(JSON.stringify(report, null, 2) + '\n');
         } else {
@@ -77,9 +116,10 @@ program
   .argument('<head>', 'head git ref (e.g. HEAD)')
   .argument('[path]', 'path to scan within the repo', '.')
   .option('--format <format>', 'output format: table | json | markdown', 'table')
-  .option('--similarity <n>', 'near-duplicate threshold, 0..1', '0.85')
+  .option('--similarity <n>', 'near-duplicate threshold, 0..1 (overrides config)', '0.85')
   .option('--fail-on-increase <pct>', 'exit non-zero if the metric increases by more than this percent')
   .option('--metric <metric>', 'metric for --fail-on-increase: tokens | cost', 'tokens')
+  .option('--config <file>', 'path to a promptscan config file (else auto-discovered)')
   .option('--no-gitignore', 'do not respect .gitignore files under the target')
   .action(
     async (
@@ -91,16 +131,17 @@ program
         similarity: string;
         failOnIncrease?: string;
         metric: string;
+        config?: string;
         gitignore: boolean;
       },
+      command: Command,
     ) => {
       if (!['table', 'json', 'markdown'].includes(options.format)) {
         console.error(`promptscan: unsupported --format '${options.format}' (supported: table, json, markdown)`);
         process.exitCode = 2;
         return;
       }
-      const threshold = parseThreshold(options.similarity);
-      if (threshold === null) {
+      if (explicit(command, 'similarity') && parseThreshold(options.similarity) === null) {
         console.error(`promptscan: --similarity must be a number in 0..1 (got '${options.similarity}')`);
         process.exitCode = 2;
         return;
@@ -121,10 +162,20 @@ program
         failOnIncreasePct = pct;
       }
 
+      let config: PromptScanConfig;
+      try {
+        ({ config } = loadConfig(options.config));
+      } catch (err) {
+        console.error(`promptscan: ${err instanceof Error ? err.message : String(err)}`);
+        process.exitCode = 2;
+        return;
+      }
+      const scanOptions = buildScanOptions(command, options, config);
+
       try {
         const { diff, failed } = await runDiff(baseRef, headRef, targetPath, process.cwd(), {
-          threshold,
-          scan: { gitignore: options.gitignore, threshold },
+          threshold: scanOptions.threshold,
+          scan: scanOptions,
           failOnIncreasePct,
           metric: options.metric,
         });

@@ -6,7 +6,7 @@ PromptScan scans a repository, finds every LLM API call, and reports what each o
 
 It makes no claims it can't prove. Every number comes from static analysis of your code. **"This prompt is 48 tokens and appears in three files"** is a fact. **"This cheaper model would work just as well"** is not — and PromptScan doesn't say it.
 
-> **Status:** pre-release (`v0.6.0`). **Python, TypeScript, and JavaScript** source; OpenAI, Anthropic, and LangChain. Roadmap phases v0.1–v0.4 are implemented and validated, v0.5 (multi-language, LangChain, dead prompts) and the first v1.0 analysis feature (context bloat) have landed; see [Roadmap](#roadmap). Not yet published to npm — see [Local usage](#usage).
+> **Status:** pre-release (`v0.6.1`). **Python, TypeScript, and JavaScript** source; OpenAI, Anthropic, and LangChain. Roadmap phases v0.1–v0.4 are implemented and validated, v0.5 (multi-language, LangChain, dead prompts) and v1.0 (context bloat, config file) has begun landing; see [Roadmap](#roadmap). Not yet published to npm — see [Local usage](#usage).
 
 ---
 
@@ -120,10 +120,31 @@ sites:
   "src/agents/support.py:44": 50000   # per-site override
 ```
 
+### Configuration
+
+Thresholds can live in a project config file so they don't have to be passed every run. PromptScan auto-discovers `promptscan.config.{json,yaml,yml}` (or `.promptscanrc`) by searching the working directory and its ancestors, or takes an explicit `--config <file>`. Zero config still works — every field is optional and falls back to the built-in default. Precedence is **CLI flag > config file > default**.
+
+```yaml
+# promptscan.config.yaml
+gitignore: true
+duplicates:
+  similarity: 0.85          # near-duplicate threshold (also --similarity)
+  minWords: 5               # ignore prompts shorter than this in dup analysis
+bloat:
+  largeTokens: 2000         # "oversized prompt" threshold
+  manyMessages: 6           # "few-shot" message-count threshold
+  boilerplateMinSites: 3    # min call sites for a block to count as boilerplate
+  boilerplateMinWords: 8
+volume:                     # monthly-projection call volumes (same as --volume-config)
+  default: 1000
+  sites:
+    "src/agents/support.py:44": 50000
+```
+
 ### Example output
 
 ```
-PromptScan v0.6.0  (phase: cost)
+PromptScan v0.6.1  (phase: cost)
 
   Scanned:  ./src
   Files:    4 source files
@@ -257,8 +278,8 @@ Full methodology and the Twilio tradeoff writeup: [VALIDATION.md](VALIDATION.md)
 | **v0.3** | Versioned pricing table, per-call + monthly cost | ✅ done |
 | **v0.4** | `diff` command, GitHub Action, PR comments, fail-on-increase | ✅ done |
 | **v0.5** | TypeScript/JavaScript support, LangChain patterns, dead-prompt detection | ✅ done |
-| **v1.0** | Context-bloat heuristics | ✅ done |
-| — | config file, stable JSON schema | planned |
+| **v1.0** | Context-bloat heuristics, config file | ✅ done |
+| — | stable JSON schema | planned |
 
 ---
 

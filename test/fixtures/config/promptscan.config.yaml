@@ -1,0 +1,11 @@
+gitignore: false
+duplicates:
+  similarity: 0.9
+  minWords: 4
+bloat:
+  largeTokens: 1500
+  boilerplateMinSites: 5
+volume:
+  default: 2000
+  sites:
+    "src/agent.py:10": 90000
