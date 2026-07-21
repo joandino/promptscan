@@ -20,7 +20,7 @@ export async function initParser(): Promise<void> {
   initialized = true;
 }
 
-function getPythonLanguage(): Language {
+export function getPythonLanguage(): Language {
   if (!pythonLanguage) {
     throw new Error('Parser not initialized — call initParser() before parsing.');
   }

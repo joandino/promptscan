@@ -1,4 +1,5 @@
 import type { ScanReport } from './types.js';
+import { renderCallSiteTable } from './table.js';
 
 /**
  * Render the M1 discovery summary as a human-readable terminal block.
@@ -44,5 +45,37 @@ export function renderScanSummary(report: ScanReport): string {
   }
 
   lines.push('');
+  lines.push(renderCallSites(report));
   return lines.join('\n') + '\n';
+}
+
+function renderCallSites(report: ScanReport): string {
+  const { callSites, stats } = report;
+  const lines: string[] = [];
+
+  if (callSites.length === 0) {
+    lines.push('  Call sites: none detected (OpenAI / Anthropic)');
+    return lines.join('\n');
+  }
+
+  const openai = callSites.filter((c) => c.provider === 'openai').length;
+  const anthropic = callSites.filter((c) => c.provider === 'anthropic').length;
+  const unresolvedModels = stats.callSites - stats.modelsResolved;
+
+  lines.push(
+    `  Call sites: ${stats.callSites} ` +
+      `(openai ${openai}, anthropic ${anthropic})`,
+  );
+  lines.push(
+    `  Models:     ${stats.modelsResolved} resolved, ${unresolvedModels} unresolved`,
+  );
+  lines.push('');
+  lines.push(
+    renderCallSiteTable(callSites)
+      .split('\n')
+      .map((l) => `  ${l}`)
+      .join('\n'),
+  );
+
+  return lines.join('\n');
 }
