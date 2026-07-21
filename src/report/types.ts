@@ -127,6 +127,45 @@ export interface ScanStats {
   inputTokens: number;
   /** True if any counted call site used a proxy/fallback tokenizer or partial content. */
   tokensApproximate: boolean;
+  /** Number of exact-duplicate groups. */
+  exactDuplicateGroups: number;
+  /** Number of near-duplicate pairs. */
+  nearDuplicatePairs: number;
+}
+
+/** A call-site location, for referencing from duplicate reports. */
+export interface SiteRef {
+  file: string;
+  line: number;
+}
+
+/** A set of call sites whose resolved prompt text is identical (after normalization). */
+export interface DuplicateGroup {
+  /** The shared normalized prompt text. */
+  text: string;
+  /** Input-token count of the shared prompt (one instance). */
+  tokens: number;
+  sites: SiteRef[];
+}
+
+/** Two call sites whose prompts are similar but not identical. */
+export interface NearDuplicatePair {
+  similarity: number; // 0..1 token-set Jaccard
+  a: SiteRef;
+  b: SiteRef;
+}
+
+export interface DuplicateReport {
+  exact: DuplicateGroup[];
+  near: NearDuplicatePair[];
+  /** Similarity threshold used for near-duplicates. */
+  threshold: number;
+  /** Prompts with fewer distinct words than this were excluded from analysis. */
+  minWords: number;
+  /** Number of distinct resolved prompts compared. */
+  comparedPrompts: number;
+  /** Set when near-duplicate analysis was capped/skipped (no silent limits). */
+  nearNote?: string;
 }
 
 export interface ScanReport {
@@ -134,6 +173,7 @@ export interface ScanReport {
   root: string;
   files: FileParseSummary[];
   callSites: CallSite[];
+  duplicates: DuplicateReport;
   stats: ScanStats;
   meta: {
     version: string;

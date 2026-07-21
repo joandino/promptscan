@@ -2,12 +2,13 @@ import path from 'node:path';
 import { discoverPythonFiles, type DiscoveryOptions } from './discovery/walk.js';
 import { initParser, createPythonParser, parseFile, getPythonLanguage } from './parse/parser.js';
 import { detectCallSites } from './detect/callsites.js';
+import { findDuplicates, type DuplicateOptions } from './analyze/duplicates.js';
 import { VERSION } from './version.js';
 import type { CallSite, FileParseSummary, ScanReport, ScanStats } from './report/types.js';
 
 export type { ScanReport, FileParseSummary, ScanStats, CallSite } from './report/types.js';
 
-export interface ScanOptions extends DiscoveryOptions {}
+export interface ScanOptions extends DiscoveryOptions, DuplicateOptions {}
 
 /**
  * v0.1 scan: discover Python files, parse each, and detect OpenAI/Anthropic
@@ -36,6 +37,8 @@ export async function scan(target: string, opts: ScanOptions = {}): Promise<Scan
     promptsUnresolved: 0,
     inputTokens: 0,
     tokensApproximate: false,
+    exactDuplicateGroups: 0,
+    nearDuplicatePairs: 0,
   };
 
   for (const absPath of files) {
@@ -78,11 +81,16 @@ export async function scan(target: string, opts: ScanOptions = {}): Promise<Scan
 
   callSites.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line || a.column - b.column);
 
+  const duplicates = findDuplicates(callSites, opts);
+  stats.exactDuplicateGroups = duplicates.exact.length;
+  stats.nearDuplicatePairs = duplicates.near.length;
+
   return {
     root,
     files: summaries,
     callSites,
+    duplicates,
     stats,
-    meta: { version: VERSION, phase: 'detection' },
+    meta: { version: VERSION, phase: 'duplicates' },
   };
 }
