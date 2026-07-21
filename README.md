@@ -6,7 +6,7 @@ PromptScan scans a repository, finds every LLM API call, and reports what each o
 
 It makes no claims it can't prove. Every number comes from static analysis of your code. **"This prompt is 48 tokens and appears in three files"** is a fact. **"This cheaper model would work just as well"** is not — and PromptScan doesn't say it.
 
-> **Status:** pre-release (`v0.3.0`). Python source, OpenAI + Anthropic. Roadmap phases v0.1–v0.3 are implemented and validated; see [Roadmap](#roadmap). Not yet published to npm — see [Local usage](#usage).
+> **Status:** pre-release (`v0.4.0`). Python source, OpenAI + Anthropic. Roadmap phases v0.1–v0.4 are implemented and validated; see [Roadmap](#roadmap). Not yet published to npm — see [Local usage](#usage).
 
 ---
 
@@ -108,7 +108,7 @@ sites:
 ### Example output
 
 ```
-PromptScan v0.3.0  (phase: cost)
+PromptScan v0.4.0  (phase: cost)
 
   Scanned:  ./src
   Files:    4 Python files
@@ -146,6 +146,54 @@ Output-cell markers: `~` approximate (proxy/fallback tokenizer) · `+` partial (
 
 - `--format table` — human-readable terminal summary (default)
 - `--format json` — the full structured `ScanReport` for downstream tooling
+
+---
+
+## CI — catch cost regressions on a PR
+
+`promptscan diff` compares two git refs and reports what changed — the token/cost
+delta, plus prompts that were added or removed (with a near-duplicate hint when a
+new prompt looks like an existing one). It fetches each ref via `git archive`, so
+it never touches your working tree.
+
+```bash
+node dist/cli.js diff main HEAD ./src            # human-readable
+node dist/cli.js diff main HEAD ./src --format markdown   # for a PR comment
+node dist/cli.js diff main HEAD ./src --fail-on-increase 5   # exit 1 if tokens grow >5%
+```
+
+```
+PromptScan diff
+
+  Input tokens    24 → 48   (+24, +100.0%)
+  Est. input cost $0.00006 → $0.00012   (+$0.00006, +100.0%)
+  Call sites      1 → 2
+
+  New prompts (1):
+    b.py:3 — +24 tokens ($0.00006) · near-duplicate of a.py:3 (0.88)
+```
+
+`--fail-on-increase <pct>` gates on `--metric tokens` (default) or `--metric cost`.
+
+### GitHub Action
+
+The repo ships a composite action ([`action.yml`](action.yml)) that runs the diff
+against a PR's base branch, posts/updates a PR comment, and fails the check on an
+increase. A ready-to-copy workflow is in [`examples/github-workflow.yml`](examples/github-workflow.yml):
+
+```yaml
+- uses: actions/checkout@v4
+  with: { fetch-depth: 0 } # both refs must be present
+- uses: promptscan/action@v1
+  with:
+    path: ./src
+    fail-on-increase: '5'
+    metric: tokens
+```
+
+> The Action is provided as the intended v0.4 integration but hasn't been exercised
+> in a live CI run yet, and points at `npx promptscan@latest` (override via the
+> `command` input until the package is published).
 
 ---
 
@@ -192,7 +240,7 @@ Full methodology and the Twilio tradeoff writeup: [VALIDATION.md](VALIDATION.md)
 | — | `.stream()` / `.parse()` call variants | ✅ done |
 | **v0.2** | Exact + near-duplicate detection, JSON output | ✅ done |
 | **v0.3** | Versioned pricing table, per-call + monthly cost | ✅ done |
-| **v0.4** | `diff` command, GitHub Action, PR comments, fail-on-increase | planned |
+| **v0.4** | `diff` command, GitHub Action, PR comments, fail-on-increase | ✅ done |
 | **v0.5** | TypeScript/JavaScript support, LangChain patterns, dead-prompt detection | planned |
 | **v1.0** | Context-bloat heuristics, config file, stable JSON schema | planned |
 

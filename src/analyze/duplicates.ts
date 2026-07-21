@@ -5,6 +5,7 @@ import type {
   NearDuplicatePair,
   SiteRef,
 } from '../report/types.js';
+import { normalizedPrompt, wordSet, jaccard } from './text.js';
 
 /** Prompts with fewer distinct words than this are ignored (too trivial to matter). */
 const DEFAULT_MIN_WORDS = 5;
@@ -15,28 +16,6 @@ export interface DuplicateOptions {
   /** Near-duplicate similarity threshold, 0..1. Default 0.85. */
   threshold?: number;
   minWords?: number;
-}
-
-/** Collapse whitespace and trim, so trivially-different spacing still matches. */
-function normalize(text: string): string {
-  return text.trim().replace(/\s+/g, ' ');
-}
-
-/** The full prompt text of a call site: all parts joined. */
-function canonicalText(site: CallSite): string {
-  return site.prompt.parts.map((p) => p.value.text).join('\n');
-}
-
-/** Lowercased distinct-word set for token-set Jaccard. */
-function wordSet(text: string): Set<string> {
-  return new Set(text.toLowerCase().split(/[^a-z0-9]+/i).filter(Boolean));
-}
-
-function jaccard(a: Set<string>, b: Set<string>): number {
-  if (a.size === 0 && b.size === 0) return 1;
-  let inter = 0;
-  for (const w of a) if (b.has(w)) inter++;
-  return inter / (a.size + b.size - inter);
 }
 
 function ref(site: CallSite): SiteRef {
@@ -61,7 +40,7 @@ export function findDuplicates(callSites: CallSite[], opts: DuplicateOptions = {
   const candidates: Candidate[] = [];
   for (const site of callSites) {
     if (site.prompt.status !== 'resolved') continue;
-    const norm = normalize(canonicalText(site));
+    const norm = normalizedPrompt(site);
     if (!norm) continue;
     const words = wordSet(norm);
     if (words.size < minWords) continue;

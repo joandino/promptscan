@@ -1,0 +1,82 @@
+name: PromptScan
+description: Comment on a PR with the change in prompt tokens and cost, and optionally fail on an increase.
+branding:
+  icon: dollar-sign
+  color: purple
+
+inputs:
+  path:
+    description: Path to scan within the repository.
+    required: false
+    default: '.'
+  base-ref:
+    description: Base git ref to compare against.
+    required: false
+    default: ${{ github.event.pull_request.base.sha }}
+  head-ref:
+    description: Head git ref.
+    required: false
+    default: ${{ github.event.pull_request.head.sha }}
+  fail-on-increase:
+    description: Fail the check if the metric increases by more than this percent (e.g. "5"). Empty to never fail.
+    required: false
+    default: ''
+  metric:
+    description: Metric for fail-on-increase — "tokens" or "cost".
+    required: false
+    default: tokens
+  similarity:
+    description: Near-duplicate similarity threshold, 0..1.
+    required: false
+    default: '0.85'
+  command:
+    description: How to invoke the promptscan CLI (override until published to npm).
+    required: false
+    default: npx --yes promptscan@latest
+  comment:
+    description: Whether to post/update a PR comment with the diff.
+    required: false
+    default: 'true'
+
+runs:
+  using: composite
+  steps:
+    - name: Run PromptScan diff
+      id: diff
+      shell: bash
+      run: |
+        args=(diff "${{ inputs.base-ref }}" "${{ inputs.head-ref }}" "${{ inputs.path }}" \
+          --format markdown --metric "${{ inputs.metric }}" --similarity "${{ inputs.similarity }}")
+        if [ -n "${{ inputs.fail-on-increase }}" ]; then
+          args+=(--fail-on-increase "${{ inputs.fail-on-increase }}")
+        fi
+        set +e
+        ${{ inputs.command }} "${args[@]}" > promptscan-diff.md
+        echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+        set -e
+        cat promptscan-diff.md
+
+    - name: Comment on PR
+      if: ${{ inputs.comment == 'true' && github.event_name == 'pull_request' }}
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const fs = require('fs');
+          const marker = '<!-- promptscan -->';
+          let body;
+          try { body = fs.readFileSync('promptscan-diff.md', 'utf8').trim(); } catch { body = ''; }
+          if (!body) body = '_PromptScan produced no diff output._';
+          const full = `${marker}\n${body}`;
+          const { data: comments } = await github.rest.issues.listComments({
+            ...context.repo, issue_number: context.issue.number,
+          });
+          const existing = comments.find((c) => c.body && c.body.includes(marker));
+          if (existing) {
+            await github.rest.issues.updateComment({ ...context.repo, comment_id: existing.id, body: full });
+          } else {
+            await github.rest.issues.createComment({ ...context.repo, issue_number: context.issue.number, body: full });
+          }
+
+    - name: Enforce threshold
+      shell: bash
+      run: exit ${{ steps.diff.outputs.exit_code }}
