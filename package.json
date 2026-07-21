@@ -35,6 +35,15 @@
     "cli"
   ],
   "license": "MIT",
+  "author": "joandino",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/joandino/promptscan.git"
+  },
+  "homepage": "https://github.com/joandino/promptscan#readme",
+  "bugs": {
+    "url": "https://github.com/joandino/promptscan/issues"
+  },
   "dependencies": {
     "cli-table3": "^0.6.5",
     "commander": "^12.1.0",
