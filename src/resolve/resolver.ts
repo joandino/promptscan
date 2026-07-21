@@ -219,23 +219,29 @@ function aggregate(parts: PromptPart[]): ResolvedPrompt {
   return { status: 'partial', parts, reason: firstReason };
 }
 
+/**
+ * Argument shape of an LLM call, shared across a method family so that
+ * create/parse/stream variants all resolve identically.
+ */
+export type ArgStyle = 'chat' | 'messages' | 'responses';
+
 /** Extract and resolve the prompt content for a detected call site. */
 export function resolvePrompt(
   callNode: Node,
-  method: string,
+  argStyle: ArgStyle,
   ctx: ResolveContext,
 ): ResolvedPrompt {
   const parts: PromptPart[] = [];
 
-  if (method === 'chat.completions.create') {
+  if (argStyle === 'chat') {
     const messages = keywordArgValue(callNode, 'messages');
     if (messages) parts.push(...resolveMessagesArg(messages, ctx, 'messages'));
-  } else if (method === 'messages.create') {
+  } else if (argStyle === 'messages') {
     const system = keywordArgValue(callNode, 'system');
     if (system) parts.push(scalarPart(system, ctx, 'system', 'system'));
     const messages = keywordArgValue(callNode, 'messages');
     if (messages) parts.push(...resolveMessagesArg(messages, ctx, 'messages'));
-  } else if (method === 'responses.create') {
+  } else if (argStyle === 'responses') {
     const instructions = keywordArgValue(callNode, 'instructions');
     if (instructions) parts.push(scalarPart(instructions, ctx, 'instructions', 'system'));
     const input = keywordArgValue(callNode, 'input');
