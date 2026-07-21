@@ -34,6 +34,8 @@ export async function scan(target: string, opts: ScanOptions = {}): Promise<Scan
     promptsResolved: 0,
     promptsPartial: 0,
     promptsUnresolved: 0,
+    inputTokens: 0,
+    tokensApproximate: false,
   };
 
   for (const absPath of files) {
@@ -62,6 +64,11 @@ export async function scan(target: string, opts: ScanOptions = {}): Promise<Scan
       if (site.prompt.status === 'resolved') stats.promptsResolved++;
       else if (site.prompt.status === 'partial') stats.promptsPartial++;
       else stats.promptsUnresolved++;
+      // Count tokens only where content was countable (resolved or partial).
+      if (site.prompt.status !== 'unresolved') {
+        stats.inputTokens += site.tokens.inputTokens;
+        if (site.tokens.approximate) stats.tokensApproximate = true;
+      }
     }
 
     outcome.tree.delete();

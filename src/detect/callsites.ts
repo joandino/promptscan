@@ -4,6 +4,7 @@ import { getDetectionQueries } from '../parse/queries.js';
 import { buildModuleContext, type ModuleContext, type Provider } from './providers.js';
 import { buildSymbolTable } from '../resolve/symbols.js';
 import { resolvePrompt } from '../resolve/resolver.js';
+import { estimateTokens } from '../tokens/tokenizer.js';
 import type { CallSite, Confidence, MatchBasis } from '../report/types.js';
 
 /** Attribute-chain suffix → provider/method. Ordered longest (most specific) first. */
@@ -126,6 +127,7 @@ export function detectCallSites(
 
     const { model, hint } = extractModel(node);
     const prompt = resolvePrompt(node, result.method, resolveCtx);
+    const tokens = estimateTokens(result.provider, model, prompt);
     const pos = node.startPosition;
     sites.push({
       file: relPath,
@@ -140,6 +142,7 @@ export function detectCallSites(
       confidence: result.confidence,
       basis: result.basis,
       prompt,
+      tokens,
     });
   }
 

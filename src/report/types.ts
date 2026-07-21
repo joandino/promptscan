@@ -58,6 +58,25 @@ export interface ResolvedPrompt {
   reason?: string;
 }
 
+/**
+ * Static estimate of a call site's INPUT tokens. Output tokens are not
+ * statically knowable and are never included.
+ */
+export interface TokenEstimate {
+  /** Tokens in statically-known prompt content. */
+  contentTokens: number;
+  /** Structural tokens (roles, per-message, priming). */
+  overheadTokens: number;
+  /** contentTokens + overheadTokens. */
+  inputTokens: number;
+  /** True when a proxy tokenizer, a fallback encoding, or partial content is involved. */
+  approximate: boolean;
+  /** Encoding used, e.g. 'o200k_base' or 'cl100k_base (anthropic proxy)'. */
+  encoding: string;
+  /** Caveats a reader must see (proxy tokenizer, partial floor, etc.). */
+  notes: string[];
+}
+
 export interface CallSite {
   /** Path relative to the scan root. */
   file: string;
@@ -77,6 +96,8 @@ export interface CallSite {
   basis: MatchBasis;
   /** Statically-resolved prompt content (M3). */
   prompt: ResolvedPrompt;
+  /** Input-token estimate for the resolved prompt (M4). */
+  tokens: TokenEstimate;
 }
 
 export interface FileParseSummary {
@@ -102,6 +123,10 @@ export interface ScanStats {
   promptsPartial: number;
   /** Call sites whose prompt could not be resolved at all. */
   promptsUnresolved: number;
+  /** Total estimated input tokens across call sites with countable content. */
+  inputTokens: number;
+  /** True if any counted call site used a proxy/fallback tokenizer or partial content. */
+  tokensApproximate: boolean;
 }
 
 export interface ScanReport {

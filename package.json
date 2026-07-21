@@ -37,6 +37,7 @@
     "cli-table3": "^0.6.5",
     "commander": "^12.1.0",
     "globby": "^14.0.2",
+    "js-tiktoken": "^1.0.21",
     "tree-sitter-wasms": "^0.1.13",
     "web-tree-sitter": "^0.25.0"
   },

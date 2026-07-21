@@ -73,6 +73,11 @@ function renderCallSites(report: ScanReport): string {
     `  Prompts:    ${stats.promptsResolved} resolved, ` +
       `${stats.promptsPartial} partial, ${stats.promptsUnresolved} unresolved`,
   );
+  const approx = stats.tokensApproximate ? '~' : '';
+  lines.push(
+    `  Input tok:  ${approx}${stats.inputTokens.toLocaleString('en-US')} ` +
+      `(estimate, input only — output tokens are not statically knowable)`,
+  );
   lines.push('');
   lines.push(
     renderCallSiteTable(callSites)
