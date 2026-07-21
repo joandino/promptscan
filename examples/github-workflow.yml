@@ -1,0 +1,28 @@
+# Example workflow for consuming repos. Copy to .github/workflows/promptscan.yml
+# in the repo you want to scan.
+name: PromptScan
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write # required to post the PR comment
+
+jobs:
+  promptscan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # both base and head refs must be present for the diff
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: promptscan/action@v1 # or your fork, until published
+        with:
+          path: ./src
+          fail-on-increase: '5' # fail the check if input tokens grow > 5%
+          metric: tokens
