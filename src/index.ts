@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import type { Parser } from 'web-tree-sitter';
 import { discoverSourceFiles, type DiscoveryOptions } from './discovery/walk.js';
@@ -10,7 +11,10 @@ import {
   type LangId,
 } from './parse/parser.js';
 import { detectCallSites } from './detect/callsites.js';
-import { detectTsCallSites } from './lang/typescript.js';
+import { detectTsCallSites, buildTsSymbolTable, buildTsImportMap } from './lang/typescript.js';
+import { buildSymbolTable } from './resolve/symbols.js';
+import { buildPyImportMap } from './resolve/imports.js';
+import { createModuleResolver, type ModuleScope } from './resolve/modules.js';
 import { findDuplicates, type DuplicateOptions } from './analyze/duplicates.js';
 import { collectDeadPromptFile, aggregateDeadPrompts, type DeadPromptFile } from './analyze/deadprompts.js';
 import { analyzeBloat, type BloatOptions } from './analyze/bloat.js';
@@ -46,6 +50,28 @@ export async function scan(target: string, opts: ScanOptions = {}): Promise<Scan
     }
     return p;
   };
+
+  // Resolves `from x import PROMPT` across sibling files within the scan by
+  // parsing imported modules on demand and following the name to its constant.
+  const moduleResolver = createModuleResolver({
+    root,
+    parse: (absPath, lang) => {
+      let source: string;
+      try {
+        source = fs.readFileSync(absPath, 'utf8');
+      } catch {
+        return null;
+      }
+      return parserFor(lang).parse(source) ?? null;
+    },
+    buildScope: (absPath, lang, tree): ModuleScope => {
+      const sourceDir = path.dirname(absPath);
+      const language = getLanguage(lang);
+      return lang === 'python'
+        ? { absPath, sourceDir, symbols: buildSymbolTable(tree, language), imports: buildPyImportMap(tree, language) }
+        : { absPath, sourceDir, symbols: buildTsSymbolTable(tree, language), imports: buildTsImportMap(tree, language) };
+    },
+  });
 
   const summaries: FileParseSummary[] = [];
   const callSites: CallSite[] = [];
@@ -97,8 +123,8 @@ export async function scan(target: string, opts: ScanOptions = {}): Promise<Scan
 
     const detected =
       lang === 'python'
-        ? detectCallSites(outcome.tree, language, relPath, absPath)
-        : detectTsCallSites(outcome.tree, language, relPath, absPath);
+        ? detectCallSites(outcome.tree, language, relPath, absPath, moduleResolver)
+        : detectTsCallSites(outcome.tree, language, relPath, absPath, moduleResolver);
     for (const site of detected) {
       callSites.push(site);
       stats.callSites++;
@@ -118,6 +144,7 @@ export async function scan(target: string, opts: ScanOptions = {}): Promise<Scan
     outcome.tree.delete();
   }
 
+  moduleResolver.dispose();
   for (const p of parsers.values()) p.delete();
 
   callSites.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line || a.column - b.column);

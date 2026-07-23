@@ -13,6 +13,13 @@ import {
 import { classify, classifyLangChain, type ArgStyle } from '../detect/patterns.js';
 import type { Confidence, MatchBasis } from '../report/types.js';
 import type { SymbolTable } from '../resolve/symbols.js';
+import {
+  emptyImportMaps,
+  type ImportBinding,
+  type ModuleImportMaps,
+  type ModuleResolver,
+  type ModuleScope,
+} from '../resolve/modules.js';
 import { readPromptFile } from '../resolve/fileload.js';
 import { estimateTokens } from '../tokens/tokenizer.js';
 import { estimateCost } from '../pricing/cost.js';
@@ -295,11 +302,46 @@ export function buildTsSymbolTable(tree: Tree, language: Language): SymbolTable 
   return { singles, ambiguous };
 }
 
+/**
+ * Cross-module import bindings from relative imports:
+ *   - `import { SYSTEM_PROMPT as SP } from './prompts'` → named[SP] = {./prompts, SYSTEM_PROMPT}
+ *   - `import * as prompts from './prompts'`            → modules[prompts] = ./prompts
+ * Bare/package specs are skipped — only in-scan files resolve.
+ */
+export function buildTsImportMap(tree: Tree, language: Language): ModuleImportMaps {
+  const maps = emptyImportMaps();
+  for (const { node } of queries(language).imports.captures(tree.rootNode)) {
+    const source = node.childForFieldName('source');
+    const spec = source ? tsStatic(source) : null;
+    if (!spec || (!spec.startsWith('.') && !spec.startsWith('/'))) continue;
+    const clause = named(node).find((c) => c.type === 'import_clause');
+    if (!clause) continue;
+    for (const child of named(clause)) {
+      if (child.type === 'named_imports') {
+        for (const spc of named(child)) {
+          if (spc.type !== 'import_specifier') continue;
+          const orig = spc.childForFieldName('name')?.text;
+          const alias = spc.childForFieldName('alias')?.text ?? orig;
+          if (orig && alias) maps.named.set(alias, { module: spec, name: orig });
+        }
+      } else if (child.type === 'namespace_import') {
+        const alias = named(child).find((c) => c.type === 'identifier');
+        if (alias) maps.modules.set(alias.text, spec);
+      }
+      // A default import binds an export we don't yet resolve (`export default`).
+    }
+  }
+  return maps;
+}
+
 // ---- value resolution ------------------------------------------------------
 
 interface ResolveContext {
   symbols: SymbolTable;
   sourceDir: string;
+  imports?: ModuleImportMaps;
+  loadModule?: (spec: string, fromDir: string) => ModuleScope | null;
+  scopeId?: string;
 }
 
 const MAX_DEPTH = 16;
@@ -377,13 +419,17 @@ function resolveExpr(node: Node, ctx: ResolveContext, visited = new Set<string>(
       const inner = named(node)[0];
       return inner ? resolveExpr(inner, ctx, visited, depth + 1) : unresolved('()', 'empty expression', 'unknown');
     }
-    case 'identifier': {
-      const name = node.text;
-      if (visited.has(name)) return unresolved(name, `circular reference to '${name}'`, 'const');
-      if (ctx.symbols.ambiguous.has(name)) return unresolved(name, `'${name}' is reassigned — not a stable constant`, 'const');
-      const rhs = ctx.symbols.singles.get(name);
-      if (!rhs) return unresolved(name, `'${name}' not statically resolvable (parameter, import, or runtime value)`, 'const');
-      return resolveExpr(rhs, ctx, new Set(visited).add(name), depth + 1);
+    case 'identifier':
+      return resolveNameCore(node.text, ctx, visited, depth);
+    case 'member_expression': {
+      // `prompts.NAME` where `prompts` is `import * as prompts from './prompts'`.
+      const object = node.childForFieldName('object');
+      const prop = node.childForFieldName('property')?.text;
+      if (object?.type === 'identifier' && prop && ctx.imports && ctx.loadModule) {
+        const modSpec = ctx.imports.modules.get(object.text);
+        if (modSpec) return resolveImported({ module: modSpec, name: prop }, ctx, visited, depth + 1);
+      }
+      return unresolved(label(node), `member access not resolved (${label(node)})`, 'unknown');
     }
     case 'call_expression': {
       const p = fileLoadPath(node);
@@ -396,6 +442,45 @@ function resolveExpr(node: Node, ctx: ResolveContext, visited = new Set<string>(
     default:
       return unresolved(label(node), `unsupported expression (${node.type})`, 'unknown');
   }
+}
+
+/** Scope-qualified visited key so the same name in two files doesn't collide. */
+function scopeKey(ctx: ResolveContext, name: string): string {
+  return `${ctx.scopeId ?? ctx.sourceDir}#${name}`;
+}
+
+/** Resolve a bare name: local const, else a followed cross-module import. */
+function resolveNameCore(name: string, ctx: ResolveContext, visited: Set<string>, depth: number): ResolvedValue {
+  const key = scopeKey(ctx, name);
+  if (visited.has(key)) return unresolved(name, `circular reference to '${name}'`, 'const');
+  if (ctx.symbols.ambiguous.has(name)) return unresolved(name, `'${name}' is reassigned — not a stable constant`, 'const');
+  const next = new Set(visited).add(key);
+  const rhs = ctx.symbols.singles.get(name);
+  if (rhs) return resolveExpr(rhs, ctx, next, depth + 1);
+  const imported = ctx.imports?.named.get(name);
+  if (imported && ctx.loadModule) return resolveImported(imported, ctx, next, depth + 1);
+  return unresolved(name, `'${name}' not statically resolvable (parameter, import, or runtime value)`, 'const');
+}
+
+/** Follow an import binding into another in-scan module and resolve the exported name there. */
+function resolveImported(binding: ImportBinding, ctx: ResolveContext, visited: Set<string>, depth: number): ResolvedValue {
+  if (depth > MAX_DEPTH) return unresolved(binding.name, 'resolution depth exceeded', 'const');
+  const scope = ctx.loadModule?.(binding.module, ctx.sourceDir);
+  if (!scope) {
+    return unresolved(
+      binding.name,
+      `imported from '${binding.module}' — module not found in scan (external package or unresolved path)`,
+      'const',
+    );
+  }
+  const childCtx: ResolveContext = {
+    symbols: scope.symbols,
+    sourceDir: scope.sourceDir,
+    imports: scope.imports,
+    loadModule: ctx.loadModule,
+    scopeId: scope.absPath,
+  };
+  return resolveNameCore(binding.name, childCtx, visited, depth + 1);
 }
 
 // ---- prompt extraction -----------------------------------------------------
@@ -541,10 +626,22 @@ function extractModel(callNode: Node): { model: string | null; hint: string | nu
 }
 
 /** Detect OpenAI/Anthropic call sites in a parsed TS/JS module and resolve each prompt. */
-export function detectTsCallSites(tree: Tree, language: Language, relPath: string, absPath: string): CallSite[] {
+export function detectTsCallSites(
+  tree: Tree,
+  language: Language,
+  relPath: string,
+  absPath: string,
+  moduleResolver?: ModuleResolver,
+): CallSite[] {
   const ctx = buildTsModuleContext(tree, language);
   const symbols = buildTsSymbolTable(tree, language);
-  const resolveCtx: ResolveContext = { symbols, sourceDir: path.dirname(absPath) };
+  const resolveCtx: ResolveContext = {
+    symbols,
+    sourceDir: path.dirname(absPath),
+    imports: buildTsImportMap(tree, language),
+    loadModule: moduleResolver ? (spec, fromDir) => moduleResolver.load(spec, fromDir, 'ts') : undefined,
+    scopeId: absPath,
+  };
 
   const sites: CallSite[] = [];
   for (const match of queries(language).calls.matches(tree.rootNode)) {

@@ -12,11 +12,18 @@ import { keywordArgValue, staticString, firstPositionalArg } from './nodes.js';
 import { detectFileLoadPath, readPromptFile } from './fileload.js';
 import { messageRole } from '../detect/context.js';
 import type { ArgStyle } from '../detect/patterns.js';
+import type { ImportBinding, ModuleImportMaps, ModuleScope } from './modules.js';
 
 export interface ResolveContext {
   symbols: SymbolTable;
   /** Directory of the source file, for resolving relative prompt-file paths. */
   sourceDir: string;
+  /** Cross-module import bindings (from `from x import NAME` / `import x`). */
+  imports?: ModuleImportMaps;
+  /** Resolve an import spec to another in-scan module's scope, or null if external. */
+  loadModule?: (spec: string, fromDir: string) => ModuleScope | null;
+  /** Absolute path identifying this scope, for cross-module cycle detection. */
+  scopeId?: string;
 }
 
 const MAX_DEPTH = 16;
@@ -67,17 +74,49 @@ function resolveStringNode(node: Node): ResolvedValue {
     : { status: 'resolved', text, segments, source: 'literal' };
 }
 
+/** Scope-qualified visited key so the same name in two files doesn't collide. */
+function scopeKey(ctx: ResolveContext, name: string): string {
+  return `${ctx.scopeId ?? ctx.sourceDir}#${name}`;
+}
+
 function resolveName(node: Node, ctx: ResolveContext, visited: Set<string>, depth: number): ResolvedValue {
-  const name = node.text;
-  if (visited.has(name)) return makeUnresolved(name, `circular reference to '${name}'`, 'const');
+  return resolveNameCore(node.text, ctx, visited, depth);
+}
+
+/** Resolve a bare name in a scope: local constant, else a followed cross-module import. */
+function resolveNameCore(name: string, ctx: ResolveContext, visited: Set<string>, depth: number): ResolvedValue {
+  const key = scopeKey(ctx, name);
+  if (visited.has(key)) return makeUnresolved(name, `circular reference to '${name}'`, 'const');
   if (ctx.symbols.ambiguous.has(name)) {
     return makeUnresolved(name, `'${name}' is reassigned — not a stable constant`, 'const');
   }
+  const next = new Set(visited).add(key);
   const rhs = ctx.symbols.singles.get(name);
-  if (!rhs) {
-    return makeUnresolved(name, `'${name}' not statically resolvable (parameter, import, or runtime value)`, 'const');
+  if (rhs) return resolveExpr(rhs, ctx, next, depth + 1);
+  const imported = ctx.imports?.named.get(name);
+  if (imported && ctx.loadModule) return resolveImported(imported, ctx, next, depth + 1);
+  return makeUnresolved(name, `'${name}' not statically resolvable (parameter, import, or runtime value)`, 'const');
+}
+
+/** Follow an import binding into another in-scan module and resolve the exported name there. */
+function resolveImported(binding: ImportBinding, ctx: ResolveContext, visited: Set<string>, depth: number): ResolvedValue {
+  if (depth > MAX_DEPTH) return makeUnresolved(binding.name, 'resolution depth exceeded', 'const');
+  const scope = ctx.loadModule?.(binding.module, ctx.sourceDir);
+  if (!scope) {
+    return makeUnresolved(
+      binding.name,
+      `imported from '${binding.module}' — module not found in scan (external package or unresolved path)`,
+      'const',
+    );
   }
-  return resolveExpr(rhs, ctx, new Set(visited).add(name), depth + 1);
+  const childCtx: ResolveContext = {
+    symbols: scope.symbols,
+    sourceDir: scope.sourceDir,
+    imports: scope.imports,
+    loadModule: ctx.loadModule,
+    scopeId: scope.absPath,
+  };
+  return resolveNameCore(binding.name, childCtx, visited, depth + 1);
 }
 
 function resolveCall(node: Node, ctx: ResolveContext): ResolvedValue {
@@ -129,8 +168,16 @@ export function resolveExpr(
       return resolveName(node, ctx, visited, depth);
     case 'call':
       return resolveCall(node, ctx);
-    case 'attribute':
+    case 'attribute': {
+      // `module.NAME` where module was imported (`import prompts`) → follow it.
+      const obj = node.childForFieldName('object');
+      const prop = node.childForFieldName('attribute')?.text;
+      if (obj?.type === 'identifier' && prop && ctx.imports && ctx.loadModule) {
+        const modSpec = ctx.imports.modules.get(obj.text);
+        if (modSpec) return resolveImported({ module: modSpec, name: prop }, ctx, visited, depth + 1);
+      }
       return makeUnresolved(label(node), `attribute access not resolved (${label(node)})`, 'unknown');
+    }
     default:
       return makeUnresolved(label(node), `unsupported expression (${node.type})`, 'unknown');
   }
