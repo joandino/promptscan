@@ -13,6 +13,7 @@ import { detectFileLoadPath, readPromptFile } from './fileload.js';
 import { messageRole } from '../detect/context.js';
 import type { ArgStyle } from '../detect/patterns.js';
 import type { ImportBinding, ModuleImportMaps, ModuleScope } from './modules.js';
+import { enclosingClassStart } from './selfattrs.js';
 
 export interface ResolveContext {
   symbols: SymbolTable;
@@ -24,6 +25,8 @@ export interface ResolveContext {
   loadModule?: (spec: string, fromDir: string) => ModuleScope | null;
   /** Absolute path identifying this scope, for cross-module cycle detection. */
   scopeId?: string;
+  /** Per-class `self.NAME = <expr>` tables (Python), keyed by class start byte. */
+  selfAttrs?: Map<number, SymbolTable>;
 }
 
 const MAX_DEPTH = 16;
@@ -119,6 +122,27 @@ function resolveImported(binding: ImportBinding, ctx: ResolveContext, visited: S
   return resolveNameCore(binding.name, childCtx, visited, depth + 1);
 }
 
+/** Resolve `self.NAME` against the enclosing class's single-assignment attribute table. */
+function resolveSelfAttr(
+  name: string,
+  classStart: number,
+  table: SymbolTable,
+  ctx: ResolveContext,
+  visited: Set<string>,
+  depth: number,
+): ResolvedValue {
+  const key = `self@${classStart}#${name}`;
+  if (visited.has(key)) return makeUnresolved(`self.${name}`, `circular self-attribute '${name}'`, 'const');
+  if (table.ambiguous.has(name)) {
+    return makeUnresolved(`self.${name}`, `'self.${name}' is assigned more than once — not a stable value`, 'const');
+  }
+  const rhs = table.singles.get(name);
+  if (!rhs) {
+    return makeUnresolved(`self.${name}`, `'self.${name}' is not set to a static value in the class`, 'const');
+  }
+  return resolveExpr(rhs, ctx, new Set(visited).add(key), depth + 1);
+}
+
 function resolveCall(node: Node, ctx: ResolveContext): ResolvedValue {
   const filePath = detectFileLoadPath(node);
   if (filePath !== null) {
@@ -169,12 +193,20 @@ export function resolveExpr(
     case 'call':
       return resolveCall(node, ctx);
     case 'attribute': {
-      // `module.NAME` where module was imported (`import prompts`) → follow it.
       const obj = node.childForFieldName('object');
       const prop = node.childForFieldName('attribute')?.text;
-      if (obj?.type === 'identifier' && prop && ctx.imports && ctx.loadModule) {
-        const modSpec = ctx.imports.modules.get(obj.text);
-        if (modSpec) return resolveImported({ module: modSpec, name: prop }, ctx, visited, depth + 1);
+      if (obj?.type === 'identifier' && prop) {
+        // `self.NAME` → resolve against the enclosing class's attribute table.
+        if (obj.text === 'self' && ctx.selfAttrs) {
+          const cls = enclosingClassStart(node);
+          const table = cls !== null ? ctx.selfAttrs.get(cls) : undefined;
+          if (table) return resolveSelfAttr(prop, cls as number, table, ctx, visited, depth);
+        }
+        // `module.NAME` where module was imported (`import prompts`) → follow it.
+        if (ctx.imports && ctx.loadModule) {
+          const modSpec = ctx.imports.modules.get(obj.text);
+          if (modSpec) return resolveImported({ module: modSpec, name: prop }, ctx, visited, depth + 1);
+        }
       }
       return makeUnresolved(label(node), `attribute access not resolved (${label(node)})`, 'unknown');
     }
@@ -202,6 +234,39 @@ function asListLiteral(node: Node, ctx: ResolveContext, visited = new Set<string
     if (rhs) return asListLiteral(rhs, ctx, new Set(visited).add(node.text));
   }
   return null;
+}
+
+/** Follow a name to a dict literal if it resolves to one; else the node if it is a dict. */
+function asDictLiteral(node: Node, ctx: ResolveContext, visited = new Set<string>()): Node | null {
+  if (node.type === 'dictionary') return node;
+  if (node.type === 'identifier' && !visited.has(node.text)) {
+    const rhs = ctx.symbols.singles.get(node.text);
+    if (rhs) return asDictLiteral(rhs, ctx, new Set(visited).add(node.text));
+  }
+  return null;
+}
+
+/**
+ * Value for `name` inside a `**kwargs` dictionary spread on a call, if the
+ * spread expression resolves to a static dict literal — e.g.
+ * `params = {"model": "gpt-4o", "messages": [...]}; create(**params)`.
+ */
+export function splatDictValue(callNode: Node, name: string, ctx: ResolveContext): Node | null {
+  const args = callNode.childForFieldName('arguments');
+  if (!args) return null;
+  for (const child of args.namedChildren) {
+    if (child?.type !== 'dictionary_splat') continue;
+    const expr = child.namedChildren.find((c): c is Node => !!c);
+    const dict = expr ? asDictLiteral(expr, ctx) : null;
+    const value = dict ? pairValue(dict, name) : null;
+    if (value) return value;
+  }
+  return null;
+}
+
+/** A call's `name=` keyword argument, falling back to `**kwargs` dict spread. */
+function argValue(callNode: Node, name: string, ctx: ResolveContext): Node | null {
+  return keywordArgValue(callNode, name) ?? splatDictValue(callNode, name, ctx);
 }
 
 /** Resolve a `content` value that may be a string or a list of text blocks. */
@@ -277,17 +342,17 @@ export function resolvePrompt(
   const parts: PromptPart[] = [];
 
   if (argStyle === 'chat') {
-    const messages = keywordArgValue(callNode, 'messages');
+    const messages = argValue(callNode, 'messages', ctx);
     if (messages) parts.push(...resolveMessagesArg(messages, ctx, 'messages'));
   } else if (argStyle === 'messages') {
-    const system = keywordArgValue(callNode, 'system');
+    const system = argValue(callNode, 'system', ctx);
     if (system) parts.push(scalarPart(system, ctx, 'system', 'system'));
-    const messages = keywordArgValue(callNode, 'messages');
+    const messages = argValue(callNode, 'messages', ctx);
     if (messages) parts.push(...resolveMessagesArg(messages, ctx, 'messages'));
   } else if (argStyle === 'responses') {
-    const instructions = keywordArgValue(callNode, 'instructions');
+    const instructions = argValue(callNode, 'instructions', ctx);
     if (instructions) parts.push(scalarPart(instructions, ctx, 'instructions', 'system'));
-    const input = keywordArgValue(callNode, 'input');
+    const input = argValue(callNode, 'input', ctx);
     if (input) {
       const list = asListLiteral(input, ctx);
       if (list) parts.push(...resolveMessagesArg(input, ctx, 'input'));
