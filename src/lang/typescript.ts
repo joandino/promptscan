@@ -7,6 +7,10 @@ import {
   langChainProvider,
   isLangChainModule,
   messageRole,
+  isVercelAiModule,
+  aiSdkProvider,
+  providerForLiteLLMModel,
+  VERCEL_AI_FUNCTIONS,
   type ModuleContext,
   type Provider,
 } from '../detect/context.js';
@@ -37,6 +41,7 @@ import type {
 
 interface TsQueries {
   calls: Query;
+  idCalls: Query;
   imports: Query;
   declarators: Query;
   reassigns: Query;
@@ -48,6 +53,7 @@ function queries(language: Language): TsQueries {
   if (cached) return cached;
   const built: TsQueries = {
     calls: new Query(language, '(call_expression function: (member_expression) @fn) @call'),
+    idCalls: new Query(language, '(call_expression function: (identifier) @fn) @call'),
     imports: new Query(language, '(import_statement) @imp'),
     declarators: new Query(language, '(variable_declarator) @decl'),
     reassigns: new Query(
@@ -106,9 +112,13 @@ function firstArgObject(callNode: Node): Node | null {
 function keywordArgValue(callNode: Node, name: string): Node | null {
   const obj = firstArgObject(callNode);
   if (!obj) return null;
-  for (const pair of named(obj)) {
-    if (pair.type !== 'pair') continue;
-    if (keyName(pair.childForFieldName('key')) === name) return pair.childForFieldName('value');
+  for (const prop of named(obj)) {
+    if (prop.type === 'pair') {
+      if (keyName(prop.childForFieldName('key')) === name) return prop.childForFieldName('value');
+    } else if (prop.type === 'shorthand_property_identifier' && prop.text === name) {
+      // `{ model }` → the value is a same-named variable reference.
+      return prop;
+    }
   }
   return null;
 }
@@ -171,6 +181,48 @@ function collectLcImports(tree: Tree, language: Language, ctx: ModuleContext): v
         ctx.importedProviders.add(p);
       }
     }
+  }
+}
+
+/**
+ * Register Vercel AI SDK usage: entrypoints imported from `ai` (generateText, …)
+ * and model factories / factory-creators imported from `@ai-sdk/*`.
+ */
+function collectVercel(tree: Tree, language: Language, ctx: ModuleContext): void {
+  for (const { node } of queries(language).imports.captures(tree.rootNode)) {
+    const source = node.childForFieldName('source');
+    const moduleName = source ? tsStatic(source) : null;
+    if (!moduleName) continue;
+    const isCore = isVercelAiModule(moduleName);
+    const factoryProvider = aiSdkProvider(moduleName);
+    if (!isCore && factoryProvider === null) continue;
+
+    const clause = named(node).find((c) => c.type === 'import_clause');
+    const namedImports = clause && named(clause).find((c) => c.type === 'named_imports');
+    if (!namedImports) continue;
+    for (const spec of named(namedImports)) {
+      if (spec.type !== 'import_specifier') continue;
+      const orig = spec.childForFieldName('name')?.text;
+      const alias = spec.childForFieldName('alias')?.text ?? orig;
+      if (!orig || !alias) continue;
+      if (isCore && VERCEL_AI_FUNCTIONS.has(orig)) ctx.vercelFns.add(alias);
+      if (factoryProvider !== null) {
+        if (orig.startsWith('create')) ctx.aiSdkCreators.set(alias, factoryProvider);
+        else ctx.aiSdkFactories.set(alias, factoryProvider);
+      }
+    }
+  }
+}
+
+/** `const custom = createOpenAI({...})` → bind `custom` as a model factory. */
+function collectAiSdkInstances(tree: Tree, language: Language, ctx: ModuleContext): void {
+  for (const { node } of queries(language).declarators.captures(tree.rootNode)) {
+    const name = node.childForFieldName('name');
+    const value = node.childForFieldName('value');
+    if (name?.type !== 'identifier' || value?.type !== 'call_expression') continue;
+    const fn = value.childForFieldName('function');
+    const provider = fn?.type === 'identifier' ? ctx.aiSdkCreators.get(fn.text) : undefined;
+    if (provider !== undefined) ctx.aiSdkFactories.set(name.text, provider);
   }
 }
 
@@ -272,8 +324,10 @@ export function buildTsModuleContext(tree: Tree, language: Language): ModuleCont
   const ctx = emptyModuleContext();
   collectImports(tree, language, ctx);
   collectLcImports(tree, language, ctx);
+  collectVercel(tree, language, ctx);
   collectDeclarators(tree, language, ctx);
   collectLcBindings(tree, language, ctx);
+  collectAiSdkInstances(tree, language, ctx);
   return ctx;
 }
 
@@ -420,6 +474,7 @@ function resolveExpr(node: Node, ctx: ResolveContext, visited = new Set<string>(
       return inner ? resolveExpr(inner, ctx, visited, depth + 1) : unresolved('()', 'empty expression', 'unknown');
     }
     case 'identifier':
+    case 'shorthand_property_identifier':
       return resolveNameCore(node.text, ctx, visited, depth);
     case 'member_expression': {
       // `prompts.NAME` where `prompts` is `import * as prompts from './prompts'`.
@@ -574,6 +629,13 @@ function resolvePrompt(callNode: Node, argStyle: ArgStyle, ctx: ResolveContext):
     }
   } else if (argStyle === 'langchain') {
     parts.push(...resolveLangChainInput(callNode, ctx));
+  } else if (argStyle === 'vercel') {
+    const system = keywordArgValue(callNode, 'system');
+    if (system) parts.push(scalarPart(system, ctx, 'system', 'system'));
+    const prompt = keywordArgValue(callNode, 'prompt');
+    if (prompt) parts.push(scalarPart(prompt, ctx, 'prompt', null));
+    const messages = keywordArgValue(callNode, 'messages');
+    if (messages) parts.push(...resolveMessagesArg(messages, ctx, 'messages'));
   }
   return aggregate(parts);
 }
@@ -623,6 +685,45 @@ function extractModel(callNode: Node): { model: string | null; hint: string | nu
   const literal = tsStatic(value);
   if (literal !== null) return { model: literal, hint: null };
   return { model: null, hint: value.text };
+}
+
+interface VercelModel {
+  provider: Provider;
+  model: string | null;
+  hint: string | null;
+}
+
+/** Resolve Vercel's `model:` — a factory call `openai("gpt-4o")` or a gateway string. */
+function resolveModelExpr(node: Node, ctx: ModuleContext, symbols: SymbolTable, depth: number): VercelModel {
+  if (node.type === 'call_expression') {
+    const fn = node.childForFieldName('function');
+    let factory: string | null = null;
+    if (fn?.type === 'identifier') factory = fn.text;
+    else if (fn?.type === 'member_expression') factory = baseIdentifier(fn); // openai.chat("…")
+    const provider = (factory ? ctx.aiSdkFactories.get(factory) : undefined) ?? 'other';
+    const args = node.childForFieldName('arguments');
+    const first = args ? named(args)[0] : null;
+    const model = first ? tsStatic(first) : null;
+    return { provider, model, hint: model === null && first ? label(first) : null };
+  }
+  if ((node.type === 'identifier' || node.type === 'shorthand_property_identifier') && depth < 4) {
+    const rhs = symbols.singles.get(node.text);
+    if (rhs) return resolveModelExpr(rhs, ctx, symbols, depth + 1);
+    return { provider: 'other', model: null, hint: node.text };
+  }
+  if (node.type === 'string' || node.type === 'template_string') {
+    // A bare gateway-style model id (`"openai/gpt-4o"`): infer provider from the string.
+    const s = tsStatic(node);
+    if (s === null) return { provider: 'other', model: null, hint: label(node) };
+    return { ...providerForLiteLLMModel(s), hint: null };
+  }
+  return { provider: 'other', model: null, hint: label(node) };
+}
+
+function extractVercelModel(callNode: Node, ctx: ModuleContext, symbols: SymbolTable): VercelModel {
+  const value = keywordArgValue(callNode, 'model');
+  if (!value) return { provider: 'other', model: null, hint: null };
+  return resolveModelExpr(value, ctx, symbols, 0);
 }
 
 /** Detect OpenAI/Anthropic call sites in a parsed TS/JS module and resolve each prompt. */
@@ -695,6 +796,38 @@ export function detectTsCallSites(
       tokens,
       cost,
     });
+  }
+
+  // Vercel AI SDK: `generateText({ model: openai("gpt-4o"), messages: [...] })`.
+  // A bare-identifier call, gated on the entrypoint being imported from `ai`.
+  if (ctx.vercelFns.size > 0) {
+    for (const match of queries(language).idCalls.matches(tree.rootNode)) {
+      const fn = match.captures.find((c) => c.name === 'fn')?.node;
+      const node = match.captures.find((c) => c.name === 'call')?.node;
+      if (!fn || !node || !ctx.vercelFns.has(fn.text)) continue;
+
+      const { provider, model, hint } = extractVercelModel(node, ctx, symbols);
+      const prompt = resolvePrompt(node, 'vercel', resolveCtx);
+      const tokens = estimateTokens(provider, model, prompt);
+      const cost = estimateCost(provider, model, tokens.inputTokens);
+      const pos = node.startPosition;
+      sites.push({
+        file: relPath,
+        line: pos.row + 1,
+        column: pos.column + 1,
+        provider,
+        method: `ai.${fn.text}`,
+        model,
+        modelResolved: model !== null,
+        modelHint: hint,
+        receiver: null,
+        confidence: 'high',
+        basis: 'import',
+        prompt,
+        tokens,
+        cost,
+      });
+    }
   }
   return sites;
 }

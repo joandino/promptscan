@@ -224,6 +224,20 @@ const resp = await client.chat.completions.create({
 });
 `,
   },
+  vercel: {
+    lang: 'typescript',
+    code: `import { generateText } from "ai";
+import { openai } from "@ai-sdk/openai";
+
+const model = openai("gpt-4o");
+
+const { text } = await generateText({
+  model,
+  system: "You are a meticulous senior support engineer at Acme Co.",
+  messages: [{ role: "user", content: ticket }],
+});
+`,
+  },
 };
 
 function loadExample(name: string): void {

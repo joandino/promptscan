@@ -49,6 +49,26 @@ test('scanSnippet: finds an exact duplicate across two TS calls', async () => {
   parser.delete();
 });
 
+test('scanSnippet: detects a Vercel AI SDK call and resolves system + messages', async () => {
+  await initParser();
+  const parser = createParser('typescript');
+  const language = getLanguage('typescript');
+  const code = [
+    'import { generateText } from "ai";',
+    'import { openai } from "@ai-sdk/openai";',
+    'const model = openai("gpt-4o");',
+    'const out = generateText({ model, system: "You are a careful reviewer of pull requests.", messages: [{ role: "user", content: ticket }] });',
+  ].join('\n');
+
+  const r = scanSnippet(code, 'typescript', parser, language);
+  assert.equal(r.stats.callSites, 1);
+  assert.equal(r.callSites[0].provider, 'openai');
+  assert.equal(r.callSites[0].model, 'gpt-4o');
+  assert.equal(r.callSites[0].method, 'ai.generateText');
+  assert.ok(r.stats.inputTokens > 0);
+  parser.delete();
+});
+
 test('scanSnippet: a cross-file import is honestly unresolved in the browser (no fs)', async () => {
   await initParser();
   const parser = createParser('python');

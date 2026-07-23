@@ -114,6 +114,29 @@ export function providerForModule(name: string): Provider | null {
   return null;
 }
 
+/** Vercel AI SDK entrypoints that take a `{ model, system, prompt, messages }` object. */
+export const VERCEL_AI_FUNCTIONS = new Set([
+  'generateText',
+  'streamText',
+  'generateObject',
+  'streamObject',
+]);
+
+/** True if a package is the Vercel AI SDK core (`ai`). */
+export function isVercelAiModule(name: string): boolean {
+  return name === 'ai';
+}
+
+/** Provider for an `@ai-sdk/*` model-factory package, or null if it isn't one. */
+export function aiSdkProvider(pkg: string): Provider | null {
+  if (!pkg.startsWith('@ai-sdk/')) return null;
+  const sub = pkg.slice('@ai-sdk/'.length);
+  if (sub === 'openai' || sub === 'azure' || sub === 'openai-compatible') return 'openai';
+  if (sub === 'anthropic') return 'anthropic';
+  // Any other provider (google, mistral, cohere, …) we can't natively tokenize/price.
+  return 'other';
+}
+
 /**
  * Per-module facts gathered from imports and constructions, used to raise or
  * gate confidence in call-site detection. Built per language, consumed by the
@@ -142,6 +165,12 @@ export interface ModuleContext {
   litellmModule: string | null;
   /** Local name → canonical litellm fn ('completion'|'acompletion') from a from-import. */
   litellmFns: Map<string, string>;
+  /** Local names of Vercel AI SDK entrypoints imported from `ai` (generateText, …). */
+  vercelFns: Set<string>;
+  /** Local name → provider for an `@ai-sdk/*` model factory (`openai`, `anthropic`, …). */
+  aiSdkFactories: Map<string, Provider>;
+  /** Local name → provider for an `@ai-sdk/*` factory *creator* (`createOpenAI`, …). */
+  aiSdkCreators: Map<string, Provider>;
 }
 
 export function emptyModuleContext(): ModuleContext {
@@ -154,5 +183,8 @@ export function emptyModuleContext(): ModuleContext {
     modelVars: new Map(),
     litellmModule: null,
     litellmFns: new Map(),
+    vercelFns: new Set(),
+    aiSdkFactories: new Map(),
+    aiSdkCreators: new Map(),
   };
 }
