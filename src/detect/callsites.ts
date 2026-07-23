@@ -2,8 +2,10 @@ import path from 'node:path';
 import type { Node, Tree, Language } from 'web-tree-sitter';
 import { getDetectionQueries } from '../parse/queries.js';
 import { buildModuleContext } from './providers.js';
-import { classify, classifyLangChain, type ArgStyle } from './patterns.js';
+import { classify, classifyLangChain, classifyLiteLLM, type ArgStyle } from './patterns.js';
+import { providerForLiteLLMModel } from './context.js';
 import type { Confidence, MatchBasis, Provider } from '../report/types.js';
+import type { ResolveContext } from '../resolve/resolver.js';
 import { buildSymbolTable } from '../resolve/symbols.js';
 import { resolvePrompt } from '../resolve/resolver.js';
 import { estimateTokens } from '../tokens/tokenizer.js';
@@ -48,8 +50,49 @@ function extractModel(callNode: Node): { model: string | null; hint: string | nu
 }
 
 /**
- * Detect OpenAI/Anthropic call sites in a parsed Python module and resolve
- * each prompt. `relPath` is the reported file path; `absPath` is used to
+ * Build a call site for a litellm `completion`/`acompletion` call. litellm is a
+ * router: the provider is carried in the `model=` string, so we derive it there
+ * rather than from an SDK import. Providers we can't natively tokenize/price map
+ * to 'other' (still reported). The prompt uses the OpenAI chat message shape.
+ */
+function litellmSite(
+  node: Node,
+  method: string,
+  receiver: string | null,
+  resolveCtx: ResolveContext,
+  relPath: string,
+): CallSite {
+  const { model: rawModel, hint } = extractModel(node);
+  let provider: Provider = 'other';
+  let model: string | null = null;
+  if (rawModel !== null) {
+    ({ provider, model } = providerForLiteLLMModel(rawModel));
+  }
+  const prompt = resolvePrompt(node, 'chat', resolveCtx);
+  const tokens = estimateTokens(provider, model, prompt);
+  const cost = estimateCost(provider, model, tokens.inputTokens);
+  const pos = node.startPosition;
+  return {
+    file: relPath,
+    line: pos.row + 1,
+    column: pos.column + 1,
+    provider,
+    method,
+    model,
+    modelResolved: model !== null,
+    modelHint: hint,
+    receiver,
+    confidence: 'high',
+    basis: 'import',
+    prompt,
+    tokens,
+    cost,
+  };
+}
+
+/**
+ * Detect OpenAI/Anthropic/litellm call sites in a parsed Python module and
+ * resolve each prompt. `relPath` is the reported file path; `absPath` is used to
  * resolve relative prompt-file loads.
  */
 export function detectCallSites(
@@ -60,8 +103,8 @@ export function detectCallSites(
 ): CallSite[] {
   const ctx = buildModuleContext(tree, language);
   const symbols = buildSymbolTable(tree, language);
-  const resolveCtx = { symbols, sourceDir: path.dirname(absPath) };
-  const { attributeCalls } = getDetectionQueries(language);
+  const resolveCtx: ResolveContext = { symbols, sourceDir: path.dirname(absPath) };
+  const { attributeCalls, identifierCalls } = getDetectionQueries(language);
 
   const sites: CallSite[] = [];
 
@@ -75,10 +118,17 @@ export function detectCallSites(
     const chain = fn.text;
     const receiver = baseIdentifier(fn);
 
-    // Direct SDK call, else a LangChain .invoke/.stream on a bound model.
+    // Direct SDK call, else a LangChain .invoke/.stream on a bound model, else
+    // an attribute-form litellm call (litellm.completion / ll.acompletion).
     const direct = classify(chain, receiver, ctx);
     const lc = direct ? null : classifyLangChain(chain, receiver, ctx);
-    if (!direct && !lc) continue;
+    const ll = !direct && !lc ? classifyLiteLLM(chain, receiver, ctx) : null;
+    if (!direct && !lc && !ll) continue;
+
+    if (ll) {
+      sites.push(litellmSite(node, ll, receiver, resolveCtx, relPath));
+      continue;
+    }
 
     let provider: Provider;
     let method: string;
@@ -121,6 +171,19 @@ export function detectCallSites(
       tokens,
       cost,
     });
+  }
+
+  // Bare `completion(...)` / `acompletion(...)` from `from litellm import …`.
+  // Only fires when the identifier is bound to a litellm entrypoint.
+  if (ctx.litellmFns.size > 0) {
+    for (const match of identifierCalls.matches(tree.rootNode)) {
+      const fn = match.captures.find((c) => c.name === 'fn')?.node;
+      const node = match.captures.find((c) => c.name === 'call')?.node;
+      if (!fn || !node) continue;
+      const canonical = ctx.litellmFns.get(fn.text);
+      if (!canonical) continue;
+      sites.push(litellmSite(node, `litellm.${canonical}`, null, resolveCtx, relPath));
+    }
   }
 
   return sites;

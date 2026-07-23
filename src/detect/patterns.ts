@@ -1,4 +1,5 @@
 import type { ModuleContext, Provider } from './providers.js';
+import { LITELLM_METHODS } from './context.js';
 import type { Confidence, MatchBasis } from '../report/types.js';
 
 /**
@@ -77,6 +78,19 @@ export function classify(chain: string, receiver: string | null, ctx: ModuleCont
   }
 
   return null;
+}
+
+/**
+ * Classify an attribute-form litellm call — `litellm.completion(...)` or an
+ * aliased-module `ll.acompletion(...)`. Gated strictly on the receiver being the
+ * imported litellm module. Returns the normalized method label, else null.
+ * (The bare `completion(...)` from-import form is matched in the detector via
+ * ctx.litellmFns, since it isn't an attribute chain.)
+ */
+export function classifyLiteLLM(chain: string, receiver: string | null, ctx: ModuleContext): string | null {
+  if (!ctx.litellmModule || receiver !== ctx.litellmModule) return null;
+  const method = chain.slice(chain.lastIndexOf('.') + 1);
+  return LITELLM_METHODS.has(method) ? `litellm.${method}` : null;
 }
 
 /** LangChain runnable invocation methods. */

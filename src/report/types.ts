@@ -6,7 +6,12 @@
 
 export type FileStatus = 'clean' | 'partial' | 'read-error';
 
-export type Provider = 'openai' | 'anthropic';
+/**
+ * 'other' is a detected call to a backend PromptScan can't natively tokenize or
+ * price (a litellm route to a non-OpenAI/Anthropic provider, or one whose model
+ * couldn't be resolved). Still reported, with a proxy token count and no price.
+ */
+export type Provider = 'openai' | 'anthropic' | 'other';
 
 /** How confident detection is that a call site is a real LLM invocation. */
 export type Confidence = 'high' | 'medium';
