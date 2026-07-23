@@ -8,7 +8,9 @@ import type { Confidence, MatchBasis, Provider } from '../report/types.js';
 import type { ResolveContext } from '../resolve/resolver.js';
 import { buildSymbolTable } from '../resolve/symbols.js';
 import { buildPyImportMap } from '../resolve/imports.js';
-import { resolvePrompt } from '../resolve/resolver.js';
+import { buildSelfAttrs } from '../resolve/selfattrs.js';
+import { resolvePrompt, resolveExpr, splatDictValue } from '../resolve/resolver.js';
+import { keywordArgValue } from '../resolve/nodes.js';
 import type { ModuleResolver } from '../resolve/modules.js';
 import { estimateTokens } from '../tokens/tokenizer.js';
 import { estimateCost } from '../pricing/cost.js';
@@ -34,21 +36,20 @@ function staticStringValue(node: Node): string | null {
   return parts.join('');
 }
 
-/** Find the `model=` keyword argument and resolve it if it is a literal. */
-function extractModel(callNode: Node): { model: string | null; hint: string | null } {
-  const args = callNode.childForFieldName('arguments');
-  if (!args) return { model: null, hint: null };
-  for (const child of args.namedChildren) {
-    if (child?.type !== 'keyword_argument') continue;
-    if (child.childForFieldName('name')?.text !== 'model') continue;
-    const value = child.childForFieldName('value');
-    if (!value) return { model: null, hint: null };
-    const literal = staticStringValue(value);
-    if (literal !== null) return { model: literal, hint: null };
-    // Dynamic model (variable/constant/f-string) — resolved in a later phase.
-    return { model: null, hint: value.text };
-  }
-  return { model: null, hint: null };
+/**
+ * Resolve the `model=` argument. A direct string literal is the fast path; a
+ * non-literal (a module constant, `self.model`, a cross-module import, or a
+ * `**kwargs` dict entry) is resolved through the full resolver and accepted only
+ * when it comes back fully static. Otherwise it's reported unresolved with a hint.
+ */
+function extractModel(callNode: Node, resolveCtx: ResolveContext): { model: string | null; hint: string | null } {
+  const value = keywordArgValue(callNode, 'model') ?? splatDictValue(callNode, 'model', resolveCtx);
+  if (!value) return { model: null, hint: null };
+  const literal = staticStringValue(value);
+  if (literal !== null) return { model: literal, hint: null };
+  const resolved = resolveExpr(value, resolveCtx);
+  if (resolved.status === 'resolved' && resolved.text) return { model: resolved.text, hint: null };
+  return { model: null, hint: value.text };
 }
 
 /**
@@ -64,7 +65,7 @@ function litellmSite(
   resolveCtx: ResolveContext,
   relPath: string,
 ): CallSite {
-  const { model: rawModel, hint } = extractModel(node);
+  const { model: rawModel, hint } = extractModel(node, resolveCtx);
   let provider: Provider = 'other';
   let model: string | null = null;
   if (rawModel !== null) {
@@ -112,6 +113,7 @@ export function detectCallSites(
     imports: buildPyImportMap(tree, language),
     loadModule: moduleResolver ? (spec, fromDir) => moduleResolver.load(spec, fromDir, 'python') : undefined,
     scopeId: absPath,
+    selfAttrs: buildSelfAttrs(tree, language),
   };
   const { attributeCalls, identifierCalls } = getDetectionQueries(language);
 
@@ -149,7 +151,7 @@ export function detectCallSites(
 
     if (direct) {
       ({ provider, method, argStyle, confidence, basis } = direct);
-      ({ model, hint } = extractModel(node));
+      ({ model, hint } = extractModel(node, resolveCtx));
     } else {
       provider = lc!.provider;
       method = lc!.method;

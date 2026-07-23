@@ -49,17 +49,19 @@ test('self-identifying chains need no import; short chains fall back to import',
   assert.equal(importOnly?.basis, 'import');
 });
 
-test('resolves literal models and reports dynamic ones as unresolved', async () => {
+test('resolves literal and constant models, reports dynamic ones as unresolved', async () => {
   const { callSites, stats } = await scan(detectRepo);
-  assert.equal(stats.modelsResolved, 5);
+  assert.equal(stats.modelsResolved, 6);
 
   assert.equal(byFile(callSites, 'openai_basic.py')?.model, 'gpt-4o');
   assert.equal(byFile(callSites, 'anthropic_basic.py')?.model, 'claude-sonnet-5');
 
+  // `model=MODEL` resolves through the symbol table rather than being dropped.
   const fromImport = byFile(callSites, 'from_import.py');
-  assert.equal(fromImport?.modelResolved, false);
-  assert.equal(fromImport?.modelHint, 'MODEL');
+  assert.equal(fromImport?.modelResolved, true);
+  assert.equal(fromImport?.model, 'claude-haiku-4-5');
 
+  // An f-string model is still honestly unresolved — never guessed.
   const dynamic = byFile(callSites, 'dynamic_model.py');
   assert.equal(dynamic?.modelResolved, false);
   assert.equal(dynamic?.modelHint, 'f"gpt-{ver}"');

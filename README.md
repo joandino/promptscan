@@ -110,6 +110,9 @@ Once it has a call site, PromptScan follows the prompt argument back to where th
 - string literals and `+` / adjacent concatenation resolve directly
 - module constants and single-assignment variables resolve through a symbol table
 - a constant imported from another file in the scan — `from prompts import SYSTEM_PROMPT`, `import prompts; prompts.SYSTEM`, or `import { SYSTEM } from "./prompts"` — is followed across files to its definition, including through a re-export chain
+- an instance attribute assigned once in a class (`self.system = SUPPORT_PROMPT` in `__init__`, then `content=self.system`) resolves against the enclosing class; an attribute assigned more than once is left unresolved
+- a `**kwargs` dict spread — `params = {"model": …, "messages": […]}; create(**params)` — is followed into the dict for both the model and the prompt
+- the `model=` argument goes through the same machinery, so a module constant, a `self.model`, or a cross-file import resolves instead of being dropped (an f-string model stays unresolved)
 - f-strings (Python) and template literals (JS/TS) resolve partially: the static text is kept and the interpolations are flagged
 - static file reads like `open("p.txt").read()`, `Path("p.md").read_text()`, and `readFileSync("p.txt")` are resolved by reading the file
 - anything else (a function parameter, a reassigned variable, a value from a DB call) is reported as unresolved, with a short reason
