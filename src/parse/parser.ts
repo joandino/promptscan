@@ -1,17 +1,19 @@
-import { createRequire } from 'node:module';
 import { readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 import { Parser, Language, type Tree } from 'web-tree-sitter';
 import type { LangId } from './lang.js';
-
-const require = createRequire(import.meta.url);
 
 // Re-exported so existing importers keep resolving these from parser.ts.
 export { langForExtension, type LangId } from './lang.js';
 
+// Grammars are vendored in the package at <root>/wasm (only the three we use),
+// resolved relative to this module so it works in dev (src/parse) and the
+// compiled build (dist/parse) alike — no runtime dependency on a grammar bundle.
+const WASM_DIR = new URL('../../wasm/', import.meta.url);
 const WASM: Record<LangId, string> = {
-  python: 'tree-sitter-wasms/out/tree-sitter-python.wasm',
-  typescript: 'tree-sitter-wasms/out/tree-sitter-typescript.wasm',
-  tsx: 'tree-sitter-wasms/out/tree-sitter-tsx.wasm',
+  python: 'tree-sitter-python.wasm',
+  typescript: 'tree-sitter-typescript.wasm',
+  tsx: 'tree-sitter-tsx.wasm',
 };
 
 const languages = new Map<LangId, Language>();
@@ -25,8 +27,7 @@ export async function initParser(): Promise<void> {
   if (initialized) return;
   await Parser.init();
   for (const [id, rel] of Object.entries(WASM) as [LangId, string][]) {
-    // Resolved from node_modules so it works in both dev (tsx) and dist builds.
-    languages.set(id, await Language.load(require.resolve(rel)));
+    languages.set(id, await Language.load(fileURLToPath(new URL(rel, WASM_DIR))));
   }
   initialized = true;
 }
