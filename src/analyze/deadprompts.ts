@@ -87,6 +87,43 @@ function wordCount(text: string): number {
   return text.trim().split(/\s+/).filter(Boolean).length;
 }
 
+/**
+ * True for files that hold test/mock/fixture data rather than shipped source.
+ * Constants defined here are expected to be unreferenced, so we don't flag them
+ * as dead prompts (references *from* these files still count, though).
+ */
+export function isTestPath(relPath: string): boolean {
+  const p = relPath.replace(/\\/g, '/').toLowerCase();
+  if (/(^|\/)(tests?|__tests__|__mocks__|specs?|fixtures|mocks|e2e)(\/)/.test(p)) return true;
+  const base = p.split('/').pop() ?? p;
+  if (base === 'conftest.py') return true;
+  if (/\.(test|spec|stories)\.[a-z]+$/.test(base)) return true; // foo.test.ts, foo.stories.tsx
+  if (/^test_.*\.py$/.test(base) || /_test\.py$/.test(base)) return true; // test_x.py, x_test.py
+  if (/^mock/.test(base)) return true; // mock_client.py, mocks.ts
+  return false;
+}
+
+/** Non-prompt name segments (ASCII art, logos, URLs, error messages, …). */
+const NON_PROMPT_SEGMENTS = new Set([
+  'ascii', 'art', 'logo', 'banner', 'url', 'uri', 'path', 'regex', 'error', 'errors',
+]);
+
+/**
+ * Reject constants that are prompt-*shaped* by size but clearly aren't prompts:
+ * ASCII art / data blobs (low letter ratio, very long "words") and constants
+ * named like logos, URLs, or error messages. Real prompts are instruction prose.
+ */
+export function looksLikePrompt(text: string, name: string): boolean {
+  if (name.split(/[_\s]+/).some((seg) => NON_PROMPT_SEGMENTS.has(seg.toLowerCase()))) return false;
+  const nonSpace = text.replace(/\s+/g, '');
+  if (nonSpace.length === 0) return false;
+  const letters = (text.match(/[A-Za-z]/g) ?? []).length;
+  if (letters / nonSpace.length < 0.55) return false; // ASCII art / symbol-heavy data
+  const words = text.trim().split(/\s+/).filter(Boolean);
+  if (nonSpace.length / words.length > 18) return false; // base64 / no real spaces
+  return true;
+}
+
 function bump(map: Map<string, number>, key: string): void {
   map.set(key, (map.get(key) ?? 0) + 1);
 }
@@ -133,16 +170,21 @@ export function collectDeadPromptFile(
     for (const tok of node.text.split(/[^A-Za-z0-9_]+/)) if (tok) stringTokens.add(tok);
   }
 
+  // Test/mock/fixture files still contribute references, but their own
+  // constants are never candidates (they're expected to be unused).
   const consts: ConstDef[] = [];
-  for (const match of qs.consts.matches(root)) {
-    const name = match.captures.find((c) => c.name === 'name')?.node;
-    const val = match.captures.find((c) => c.name === 'val')?.node;
-    const stmt = match.captures.find((c) => c.name === 'stmt')?.node;
-    if (!name || !val || !stmt) continue;
-    if (!isModuleLevel(stmt, CFG[fam].scopeBreakers)) continue;
-    const text = staticLiteral(val);
-    if (text === null || wordCount(text) < minWords) continue;
-    consts.push({ file: relPath, line: name.startPosition.row + 1, name: name.text, text });
+  if (!isTestPath(relPath)) {
+    for (const match of qs.consts.matches(root)) {
+      const name = match.captures.find((c) => c.name === 'name')?.node;
+      const val = match.captures.find((c) => c.name === 'val')?.node;
+      const stmt = match.captures.find((c) => c.name === 'stmt')?.node;
+      if (!name || !val || !stmt) continue;
+      if (!isModuleLevel(stmt, CFG[fam].scopeBreakers)) continue;
+      const text = staticLiteral(val);
+      if (text === null || wordCount(text) < minWords) continue;
+      if (!looksLikePrompt(text, name.text)) continue;
+      consts.push({ file: relPath, line: name.startPosition.row + 1, name: name.text, text });
+    }
   }
 
   return { names, targets, stringTokens, consts };

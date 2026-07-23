@@ -55,7 +55,8 @@ if (!existsSync(runtime)) throw new Error(`missing web-tree-sitter runtime: ${ru
 cpSync(runtime, path.join(OUT, 'tree-sitter.wasm'));
 
 for (const g of ['python', 'typescript', 'tsx']) {
-  const src = require.resolve(`tree-sitter-wasms/out/tree-sitter-${g}.wasm`);
+  const src = path.join('wasm', `tree-sitter-${g}.wasm`);
+  if (!existsSync(src)) throw new Error(`missing vendored grammar: ${src}`);
   cpSync(src, path.join(OUT, `tree-sitter-${g}.wasm`));
 }
 
