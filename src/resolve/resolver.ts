@@ -269,12 +269,30 @@ function argValue(callNode: Node, name: string, ctx: ResolveContext): Node | nul
   return keywordArgValue(callNode, name) ?? splatDictValue(callNode, name, ctx);
 }
 
-/** Resolve a `content` value that may be a string or a list of text blocks. */
-function resolveContent(node: Node, ctx: ResolveContext): ResolvedValue {
-  if (node.type === 'list') {
+/** A resolved content value plus whether it carries a cache breakpoint. */
+interface ContentResult {
+  value: ResolvedValue;
+  cached: boolean;
+}
+
+/** True when a content-block dict carries an Anthropic `cache_control` key. */
+function hasCacheControl(dict: Node): boolean {
+  return pairValue(dict, 'cache_control') !== null;
+}
+
+/**
+ * Resolve a `content` value that may be a string or a list of text blocks, and
+ * report whether any block carries a `cache_control` breakpoint. The list may be
+ * a literal or a name bound to one, so an extracted block list still resolves.
+ */
+function resolveContent(node: Node, ctx: ResolveContext): ContentResult {
+  const list = asListLiteral(node, ctx);
+  if (list) {
     const blocks: ResolvedValue[] = [];
-    for (const block of node.namedChildren) {
+    let cached = false;
+    for (const block of list.namedChildren) {
       if (block?.type === 'dictionary') {
+        if (hasCacheControl(block)) cached = true;
         const textVal = pairValue(block, 'text');
         blocks.push(
           textVal
@@ -285,39 +303,40 @@ function resolveContent(node: Node, ctx: ResolveContext): ResolvedValue {
         blocks.push(makeUnresolved(label(block), 'non-dict content block', 'unknown'));
       }
     }
-    if (blocks.length === 0) return makeUnresolved('[]', 'empty content list', 'unknown');
-    return combine(blocks, 'concat');
+    if (blocks.length === 0) return { value: makeUnresolved('[]', 'empty content list', 'unknown'), cached };
+    return { value: combine(blocks, 'concat'), cached };
   }
-  return resolveExpr(node, ctx);
+  return { value: resolveExpr(node, ctx), cached: false };
 }
 
 function resolveMessagesArg(node: Node, ctx: ResolveContext, origin: PromptOrigin): PromptPart[] {
   const list = asListLiteral(node, ctx);
   if (!list) {
-    return [{ role: null, origin, value: makeUnresolved(label(node), 'messages is not a static list', 'unknown') }];
+    return [{ role: null, origin, value: makeUnresolved(label(node), 'messages is not a static list', 'unknown'), cacheControl: false }];
   }
 
   const parts: PromptPart[] = [];
   for (const element of list.namedChildren) {
     if (element?.type !== 'dictionary') {
       if (element) {
-        parts.push({ role: null, origin, value: makeUnresolved(label(element), 'message is not a literal dict', 'unknown') });
+        parts.push({ role: null, origin, value: makeUnresolved(label(element), 'message is not a literal dict', 'unknown'), cacheControl: false });
       }
       continue;
     }
     const roleNode = pairValue(element, 'role');
     const role = roleNode ? staticString(roleNode) : null;
     const contentNode = pairValue(element, 'content');
-    const value = contentNode
+    const content = contentNode
       ? resolveContent(contentNode, ctx)
-      : makeUnresolved(label(element), 'message has no content field', 'unknown');
-    parts.push({ role, origin, value });
+      : { value: makeUnresolved(label(element), 'message has no content field', 'unknown'), cached: false };
+    parts.push({ role, origin, value: content.value, cacheControl: content.cached });
   }
   return parts;
 }
 
 function scalarPart(node: Node, ctx: ResolveContext, origin: PromptOrigin, role: string | null): PromptPart {
-  return { role, origin, value: resolveContent(node, ctx) };
+  const content = resolveContent(node, ctx);
+  return { role, origin, value: content.value, cacheControl: content.cached };
 }
 
 function aggregate(parts: PromptPart[]): ResolvedPrompt {
@@ -362,6 +381,13 @@ export function resolvePrompt(
     parts.push(...resolveLangChainInput(callNode, ctx));
   }
 
+  // Automatic caching: a single top-level `cache_control=` on the request lets
+  // the API manage breakpoints, which caches the whole stable prefix. Marking
+  // the last part is equivalent under the "up to and including" prefix rule.
+  if (parts.length > 0 && argValue(callNode, 'cache_control', ctx)) {
+    parts[parts.length - 1]!.cacheControl = true;
+  }
+
   return aggregate(parts);
 }
 
@@ -371,31 +397,31 @@ function resolveLangChainElement(el: Node, ctx: ResolveContext): PromptPart {
     const ctorName = el.childForFieldName('function')?.text ?? '';
     const role = messageRole(ctorName);
     const content = keywordArgValue(el, 'content') ?? firstPositionalArg(el);
-    return { role, origin: 'input', value: content ? resolveExpr(content, ctx) : makeUnresolved(label(el), 'message without content', 'unknown') };
+    return { role, origin: 'input', value: content ? resolveExpr(content, ctx) : makeUnresolved(label(el), 'message without content', 'unknown'), cacheControl: false };
   }
   if (el.type === 'tuple') {
     const items = el.namedChildren.filter((c): c is Node => !!c);
     const role = items[0] ? staticString(items[0]) : null;
-    return { role, origin: 'input', value: items[1] ? resolveExpr(items[1], ctx) : makeUnresolved(label(el), 'empty message tuple', 'unknown') };
+    return { role, origin: 'input', value: items[1] ? resolveExpr(items[1], ctx) : makeUnresolved(label(el), 'empty message tuple', 'unknown'), cacheControl: false };
   }
-  return { role: null, origin: 'input', value: makeUnresolved(label(el), 'unsupported message element', 'unknown') };
+  return { role: null, origin: 'input', value: makeUnresolved(label(el), 'unsupported message element', 'unknown'), cacheControl: false };
 }
 
 /** Resolve the first positional argument of a LangChain `.invoke(...)`. */
 function resolveLangChainInput(callNode: Node, ctx: ResolveContext): PromptPart[] {
   const arg = firstPositionalArg(callNode);
-  if (!arg) return [{ role: null, origin: 'input', value: makeUnresolved('', 'no prompt argument', 'unknown') }];
+  if (!arg) return [{ role: null, origin: 'input', value: makeUnresolved('', 'no prompt argument', 'unknown'), cacheControl: false }];
 
   const list = asListLiteral(arg, ctx);
   if (list) {
     const els = list.namedChildren.filter((c): c is Node => !!c);
     return els.length > 0
       ? els.map((el) => resolveLangChainElement(el, ctx))
-      : [{ role: null, origin: 'input', value: makeUnresolved('[]', 'empty message list', 'unknown') }];
+      : [{ role: null, origin: 'input', value: makeUnresolved('[]', 'empty message list', 'unknown'), cacheControl: false }];
   }
   if (arg.type === 'string' || arg.type === 'concatenated_string' || arg.type === 'identifier') {
-    return [{ role: null, origin: 'input', value: resolveExpr(arg, ctx) }];
+    return [{ role: null, origin: 'input', value: resolveExpr(arg, ctx), cacheControl: false }];
   }
   // dict / template / chain input — the prompt is usually in a template.
-  return [{ role: null, origin: 'input', value: makeUnresolved(label(arg), 'LangChain input (prompt may be defined in a template)', 'unknown') }];
+  return [{ role: null, origin: 'input', value: makeUnresolved(label(arg), 'LangChain input (prompt may be defined in a template)', 'unknown'), cacheControl: false }];
 }

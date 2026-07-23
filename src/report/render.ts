@@ -52,9 +52,51 @@ export function renderScanSummary(report: ScanReport): string {
   if (dead) lines.push('', dead);
   const bloat = renderBloat(report);
   if (bloat) lines.push('', bloat);
+  const caching = renderCaching(report);
+  if (caching) lines.push('', caching);
   const proj = renderProjection(report);
   if (proj) lines.push('', proj);
   return lines.join('\n') + '\n';
+}
+
+function renderCaching(report: ScanReport): string {
+  const c = report.caching;
+  if (c.opportunities.length === 0 && c.cachedSites === 0 && c.belowMinimum.length === 0) return '';
+
+  const lines: string[] = [];
+
+  if (c.opportunities.length > 0) {
+    const saving = c.totalSavingsPerCallUsd > 0 ? `, saves ${formatUsd(c.totalSavingsPerCallUsd)} per round of calls` : '';
+    lines.push(`  Prompt caching: ${c.opportunities.length} uncached prompt${c.opportunities.length === 1 ? '' : 's'} large enough to cache${saving}`);
+    for (const o of c.opportunities.slice(0, 5)) {
+      const save = o.savingsPerCallUsd === null ? 'unpriced' : `−${formatUsd(o.savingsPerCallUsd)}/call`;
+      const shared = o.sharedWith.length > 0 ? ` (same prompt at ${o.sharedWith.length} other site${o.sharedWith.length === 1 ? '' : 's'})` : '';
+      lines.push(`      ${o.file}:${o.line} — ${o.cacheableTokens.toLocaleString('en-US')} tok on ${o.model}: ${save}${shared}`);
+    }
+    if (c.opportunities.length > 5) {
+      lines.push(`      … and ${c.opportunities.length - 5} more`);
+    }
+    lines.push('      Add cache_control to the stable prefix; repeat calls bill it at 0.1x.');
+  }
+
+  if (c.cachedSites > 0) {
+    lines.push(`  Already caching: ${c.cachedSites} call site${c.cachedSites === 1 ? '' : 's'} (priced at the cache-read rate)`);
+  }
+
+  // Never recommended — a breakpoint below the model minimum is ignored by the API.
+  if (c.belowMinimum.length > 0) {
+    const b = c.belowMinimum[0]!;
+    lines.push(
+      `  Below cache minimum: ${c.belowMinimum.length} prompt${c.belowMinimum.length === 1 ? '' : 's'} too small to cache ` +
+        `(e.g. ${b.file}:${b.line} — ${b.tokens.toLocaleString('en-US')} tok, ${b.model} needs ${b.minCacheableTokens.toLocaleString('en-US')})`,
+    );
+  }
+
+  if (c.skippedUnknownModel > 0) {
+    lines.push(`  Caching not assessed: ${c.skippedUnknownModel} site${c.skippedUnknownModel === 1 ? '' : 's'} with an unresolved model (minimum unknown)`);
+  }
+
+  return lines.join('\n');
 }
 
 function renderBloat(report: ScanReport): string {

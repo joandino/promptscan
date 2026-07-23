@@ -6,19 +6,55 @@ import type {
   Provider,
 } from '../report/types.js';
 import { resolvePricing } from './table.js';
+import { CACHE_READ_MULTIPLIER, CACHE_WRITE_5M_MULTIPLIER } from './caching.js';
 
-/** Estimate the input cost of a single call from its token count and model. */
+/**
+ * Estimate the input cost of a single call from its token count and model.
+ *
+ * `cachedTokens` is the prefix covered by a `cache_control` breakpoint. Billing
+ * it at the base rate would overstate the cost of a caching call site by up to
+ * 10x, so the headline `inputCostUsd` is the STEADY-STATE cost (cached prefix at
+ * the 0.1x read rate) — a prefix is written once and read on every later call.
+ * The one-time write premium is reported separately rather than amortized into a
+ * per-call number we can't ground without a call-count assumption.
+ */
 export function estimateCost(
   provider: Provider,
   model: string | null,
   inputTokens: number,
+  cachedTokens = 0,
 ): CostEstimate {
   const entry = resolvePricing(provider, model);
   if (!entry) {
-    return { inputCostUsd: null, pricePerMTok: null, pricedAs: null };
+    return {
+      inputCostUsd: null,
+      uncachedInputCostUsd: null,
+      cacheWriteCostUsd: null,
+      pricePerMTok: null,
+      pricedAs: null,
+    };
   }
+
+  const perToken = entry.inputPerMTok / 1_000_000;
+  const uncachedInputCostUsd = inputTokens * perToken;
+
+  // Clamp: a cached prefix can never exceed the tokens actually counted.
+  const cached = Math.min(Math.max(cachedTokens, 0), inputTokens);
+  if (cached === 0) {
+    return {
+      inputCostUsd: uncachedInputCostUsd,
+      uncachedInputCostUsd,
+      cacheWriteCostUsd: null,
+      pricePerMTok: entry.inputPerMTok,
+      pricedAs: entry.id,
+    };
+  }
+
+  const rest = inputTokens - cached;
   return {
-    inputCostUsd: (inputTokens / 1_000_000) * entry.inputPerMTok,
+    inputCostUsd: cached * perToken * CACHE_READ_MULTIPLIER + rest * perToken,
+    uncachedInputCostUsd,
+    cacheWriteCostUsd: cached * perToken * CACHE_WRITE_5M_MULTIPLIER + rest * perToken,
     pricePerMTok: entry.inputPerMTok,
     pricedAs: entry.id,
   };

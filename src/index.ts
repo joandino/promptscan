@@ -18,6 +18,7 @@ import { createModuleResolver, type ModuleScope } from './resolve/modules.js';
 import { findDuplicates, type DuplicateOptions } from './analyze/duplicates.js';
 import { collectDeadPromptFile, aggregateDeadPrompts, type DeadPromptFile } from './analyze/deadprompts.js';
 import { analyzeBloat, type BloatOptions } from './analyze/bloat.js';
+import { analyzeCaching, type CachingOptions } from './analyze/caching.js';
 import { projectMonthly, type VolumeConfig } from './pricing/cost.js';
 import { PRICING_VERSION, PRICING_AS_OF } from './pricing/table.js';
 import { SCHEMA_VERSION } from './report/schema.js';
@@ -29,6 +30,8 @@ export type { ScanReport, FileParseSummary, ScanStats, CallSite } from './report
 export interface ScanOptions extends DiscoveryOptions, DuplicateOptions, BloatOptions {
   /** Call-volume estimate; when present, the report includes a monthly projection. */
   volume?: VolumeConfig;
+  /** Prompt-caching analysis thresholds. */
+  caching?: CachingOptions;
 }
 
 /**
@@ -93,6 +96,9 @@ export async function scan(target: string, opts: ScanOptions = {}): Promise<Scan
     unpricedCallSites: 0,
     deadPrompts: 0,
     bloatFlags: 0,
+    cachedCallSites: 0,
+    cacheOpportunities: 0,
+    cacheSavingsPerCallUsd: 0,
   };
   const deadData: DeadPromptFile[] = [];
 
@@ -159,6 +165,11 @@ export async function scan(target: string, opts: ScanOptions = {}): Promise<Scan
   const bloat = analyzeBloat(callSites, opts);
   stats.bloatFlags = bloat.oversized.length + bloat.fewShot.length + bloat.boilerplate.length;
 
+  const caching = analyzeCaching(callSites, opts.caching);
+  stats.cachedCallSites = caching.cachedSites;
+  stats.cacheOpportunities = caching.opportunities.length;
+  stats.cacheSavingsPerCallUsd = caching.totalSavingsPerCallUsd;
+
   const projection = opts.volume ? projectMonthly(callSites, opts.volume) : null;
 
   return {
@@ -168,6 +179,7 @@ export async function scan(target: string, opts: ScanOptions = {}): Promise<Scan
     duplicates,
     deadPrompts,
     bloat,
+    caching,
     projection,
     stats,
     meta: {
