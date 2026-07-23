@@ -1,11 +1,12 @@
 import { createRequire } from 'node:module';
 import { readFile } from 'node:fs/promises';
 import { Parser, Language, type Tree } from 'web-tree-sitter';
+import type { LangId } from './lang.js';
 
 const require = createRequire(import.meta.url);
 
-/** Grammars PromptScan can parse. */
-export type LangId = 'python' | 'typescript' | 'tsx';
+// Re-exported so existing importers keep resolving these from parser.ts.
+export { langForExtension, type LangId } from './lang.js';
 
 const WASM: Record<LangId, string> = {
   python: 'tree-sitter-wasms/out/tree-sitter-python.wasm',
@@ -46,26 +47,6 @@ export function createParser(id: LangId): Parser {
   const parser = new Parser();
   parser.setLanguage(getLanguage(id));
   return parser;
-}
-
-/** Map a file extension to the grammar that parses it, or null if unsupported. */
-export function langForExtension(ext: string): LangId | null {
-  switch (ext.toLowerCase()) {
-    case '.py':
-      return 'python';
-    case '.ts':
-    case '.mts':
-    case '.cts':
-    case '.js':
-    case '.mjs':
-    case '.cjs':
-      return 'typescript';
-    case '.tsx':
-    case '.jsx':
-      return 'tsx';
-    default:
-      return null;
-  }
 }
 
 export type FileParseOutcome =

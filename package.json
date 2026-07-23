@@ -21,6 +21,8 @@
     "start": "node dist/cli.js",
     "test": "node --import tsx --test test/*.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck:web": "tsc -p tsconfig.web.json",
+    "build:web": "node web/build.mjs",
     "prepack": "npm run build",
     "prepublishOnly": "npm run typecheck && npm test"
   },
@@ -55,7 +57,10 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "@types/path-browserify": "^1.0.3",
     "ajv": "^8.20.0",
+    "esbuild": "^0.28.1",
+    "path-browserify": "^1.0.1",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0"
   }
