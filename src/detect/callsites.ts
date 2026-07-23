@@ -7,7 +7,9 @@ import { providerForLiteLLMModel } from './context.js';
 import type { Confidence, MatchBasis, Provider } from '../report/types.js';
 import type { ResolveContext } from '../resolve/resolver.js';
 import { buildSymbolTable } from '../resolve/symbols.js';
+import { buildPyImportMap } from '../resolve/imports.js';
 import { resolvePrompt } from '../resolve/resolver.js';
+import type { ModuleResolver } from '../resolve/modules.js';
 import { estimateTokens } from '../tokens/tokenizer.js';
 import { estimateCost } from '../pricing/cost.js';
 import type { CallSite } from '../report/types.js';
@@ -100,10 +102,17 @@ export function detectCallSites(
   language: Language,
   relPath: string,
   absPath: string,
+  moduleResolver?: ModuleResolver,
 ): CallSite[] {
   const ctx = buildModuleContext(tree, language);
   const symbols = buildSymbolTable(tree, language);
-  const resolveCtx: ResolveContext = { symbols, sourceDir: path.dirname(absPath) };
+  const resolveCtx: ResolveContext = {
+    symbols,
+    sourceDir: path.dirname(absPath),
+    imports: buildPyImportMap(tree, language),
+    loadModule: moduleResolver ? (spec, fromDir) => moduleResolver.load(spec, fromDir, 'python') : undefined,
+    scopeId: absPath,
+  };
   const { attributeCalls, identifierCalls } = getDetectionQueries(language);
 
   const sites: CallSite[] = [];

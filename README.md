@@ -102,6 +102,7 @@ Once it has a call site, PromptScan follows the prompt argument back to where th
 
 - string literals and `+` / adjacent concatenation resolve directly
 - module constants and single-assignment variables resolve through a symbol table
+- a constant imported from another file in the scan — `from prompts import SYSTEM_PROMPT`, `import prompts; prompts.SYSTEM`, or `import { SYSTEM } from "./prompts"` — is followed across files to its definition, including through a re-export chain
 - f-strings (Python) and template literals (JS/TS) resolve partially: the static text is kept and the interpolations are flagged
 - static file reads like `open("p.txt").read()`, `Path("p.md").read_text()`, and `readFileSync("p.txt")` are resolved by reading the file
 - anything else (a function parameter, a reassigned variable, a value from a DB call) is reported as unresolved, with a short reason
@@ -206,7 +207,7 @@ The detection was checked against three real repositories (`openai/openai-python
 
 - Dead-prompt detection is a heuristic. It can't see runtime reflection, and a prompt a library exports for others to import will look unused. Verify before deleting.
 - A call on an attribute receiver like `self._client.messages.create` in a file that doesn't import the SDK by name won't be detected. In practice this only happens inside a provider's own package.
-- Cross-module constants (`from other import PROMPT`) and non-literal file paths are reported as unresolved rather than guessed.
+- Cross-file constants resolve only when the imported module is a file inside the scan; a constant pulled from an installed package, a dynamic import, or a `*`/default export stays unresolved. Non-literal file paths are reported as unresolved rather than guessed.
 - litellm calls to providers other than OpenAI and Anthropic are detected and reported as provider `other`, but their tokens are only a `cl100k` proxy and they carry no price — PromptScan tokenizes and prices OpenAI and Anthropic natively, nothing else. litellm support is Python-only.
 - Prices drift. The pricing table is one bundled file with an as-of date, and the OpenAI figures are list prices. Check them before you rely on the dollar numbers.
 
