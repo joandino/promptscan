@@ -39,13 +39,23 @@ export function estimateTokens(
 ): TokenEstimate {
   const { encoding, matched } = resolveEncoding(provider, model);
 
+  // Caching is prefix-based: everything up to and including the LAST part with a
+  // cache_control breakpoint is cached. Find that boundary first.
+  let lastCached = -1;
+  prompt.parts.forEach((part, i) => {
+    if (part.cacheControl) lastCached = i;
+  });
+
   let contentTokens = 0;
   let overheadTokens = 0;
-  for (const part of prompt.parts) {
-    contentTokens += countTokens(part.value.text, encoding);
+  let cachedTokens = 0;
+  prompt.parts.forEach((part, i) => {
+    const partTokens = countTokens(part.value.text, encoding);
+    contentTokens += partTokens;
+    if (i <= lastCached) cachedTokens += partTokens;
     overheadTokens += PER_MESSAGE_TOKENS;
     if (part.role) overheadTokens += countTokens(part.role, encoding);
-  }
+  });
   if (prompt.parts.length > 0) overheadTokens += PRIMING_TOKENS;
 
   const notes: string[] = [];
@@ -72,6 +82,7 @@ export function estimateTokens(
     contentTokens,
     overheadTokens,
     inputTokens: contentTokens + overheadTokens,
+    cachedTokens,
     approximate,
     encoding: encodingLabel(provider, encoding),
     notes,

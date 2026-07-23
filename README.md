@@ -133,6 +133,21 @@ Beyond per-call numbers, a scan surfaces a few patterns worth cleaning up:
 - **Dead prompts.** A prompt-shaped string constant that nothing references anywhere in the scan. This one is deliberately cautious: it only fires when the name never appears as a reference in any file, never shows up inside a string literal (which covers `__all__`, `getattr`, and similar dynamic access), and the value is a module-level, fully static, six-plus-word string. It skips constants defined in test/mock/fixture files (references from them still count) and ones that aren't instruction prose — ASCII art, data blobs, and things named like logos, URLs, or error messages. It's still a heuristic, reported on its own, and it can't see reflection or a library prompt that outside code imports, so verify before deleting.
 - **Context bloat.** Three heuristics: a single prompt over a token threshold, a prompt with a lot of message parts (a possible pile of few-shot examples), and a block of text repeated verbatim across several call sites. That last one is the part-level version of duplicate detection, so it catches a shared system prompt across calls whose user turns differ, which is a good candidate to extract or cache.
 
+### Prompt caching
+
+Anthropic's prompt caching changes the cost of a call by an order of magnitude, so PromptScan accounts for it in both directions.
+
+If a call already carries a `cache_control` breakpoint, the cached prefix is billed at the cache-read rate (0.1× base) rather than full price. Reporting it at full price would overstate that call site's cost by up to 10×. The reported cost is the steady-state one, since a prefix is written once and read on every later call; the one-time write premium (1.25× on the prefix) is carried separately in the JSON as `cacheWriteCostUsd`, not amortized into a per-call number that would need a call-count assumption to be meaningful.
+
+If a call doesn't cache but could, it's reported as an opportunity with the input cost it would save per repeat call. Two rules keep this from turning into bad advice:
+
+- **The minimum is per model, and it's enforced.** A breakpoint on a prefix shorter than the model's minimum is silently ignored by the API — no cache, no discount. That minimum ranges from 512 tokens (Fable 5) to 1,024 (Opus 4.8, Sonnet 5) to 4,096 (Opus 4.6, Haiku 4.5), so the same prompt can be worth caching on one model and a no-op on another. Prompts under their minimum are counted, never recommended, and an Anthropic model that isn't in the table falls back to the largest minimum so an unknown model under-reports rather than misleads.
+- **Only a real prefix counts.** A cache breakpoint covers a contiguous prefix that's identical on every call, so the cacheable size is measured over the leading parts that fully resolve, stopping at the first one with runtime content. A prompt with a large static block sitting behind a runtime turn has no stable prefix and isn't flagged, even though its static token total is large.
+
+OpenAI is deliberately out of scope here: its caching is automatic, with no marker to detect and no code change to recommend. Flagging those call sites would be noise, and applying a discount would mean guessing at a hit rate that isn't visible in the source.
+
+Because this reads only what's static in the source, it under-reports by design. Code that attaches `cache_control` programmatically, or builds its system prompt at runtime, is invisible to it — that's a limit of static analysis, not a gap to be papered over with a guess.
+
 ## Configuration
 
 Thresholds can live in a config file so you don't have to pass them every run. PromptScan looks for `promptscan.config.{json,yaml,yml}` (or `.promptscanrc`) in the working directory and its ancestors, or you can point at one with `--config`. Everything is optional and falls back to a sane default, and a CLI flag always wins over the file.

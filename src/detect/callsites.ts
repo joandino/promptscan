@@ -73,7 +73,7 @@ function litellmSite(
   }
   const prompt = resolvePrompt(node, 'chat', resolveCtx);
   const tokens = estimateTokens(provider, model, prompt);
-  const cost = estimateCost(provider, model, tokens.inputTokens);
+  const cost = estimateCost(provider, model, tokens.inputTokens, tokens.cachedTokens);
   const pos = node.startPosition;
   return {
     file: relPath,
@@ -164,7 +164,7 @@ export function detectCallSites(
 
     const prompt = resolvePrompt(node, argStyle, resolveCtx);
     const tokens = estimateTokens(provider, model, prompt);
-    const cost = estimateCost(provider, model, tokens.inputTokens);
+    const cost = estimateCost(provider, model, tokens.inputTokens, tokens.cachedTokens);
     const pos = node.startPosition;
     sites.push({
       file: relPath,

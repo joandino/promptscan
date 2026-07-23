@@ -5,7 +5,7 @@
   "description": "The `--format json` output of `promptscan scan`. schemaVersion 1.0.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["root", "files", "callSites", "duplicates", "deadPrompts", "bloat", "projection", "stats", "meta"],
+  "required": ["root", "files", "callSites", "duplicates", "deadPrompts", "bloat", "caching", "projection", "stats", "meta"],
   "properties": {
     "root": { "type": "string" },
     "files": { "type": "array", "items": { "$ref": "#/$defs/FileParseSummary" } },
@@ -13,6 +13,7 @@
     "duplicates": { "$ref": "#/$defs/DuplicateReport" },
     "deadPrompts": { "type": "array", "items": { "$ref": "#/$defs/DeadPrompt" } },
     "bloat": { "$ref": "#/$defs/BloatReport" },
+    "caching": { "$ref": "#/$defs/CachingReport" },
     "projection": {
       "anyOf": [{ "$ref": "#/$defs/MonthlyProjection" }, { "type": "null" }]
     },
@@ -74,11 +75,12 @@
     "PromptPart": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["role", "origin", "value"],
+      "required": ["role", "origin", "value", "cacheControl"],
       "properties": {
         "role": { "type": ["string", "null"] },
         "origin": { "enum": ["messages", "system", "input", "instructions", "prompt"] },
-        "value": { "$ref": "#/$defs/ResolvedValue" }
+        "value": { "$ref": "#/$defs/ResolvedValue" },
+        "cacheControl": { "type": "boolean" }
       }
     },
     "ResolvedPrompt": {
@@ -94,11 +96,12 @@
     "TokenEstimate": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["contentTokens", "overheadTokens", "inputTokens", "approximate", "encoding", "notes"],
+      "required": ["contentTokens", "overheadTokens", "inputTokens", "cachedTokens", "approximate", "encoding", "notes"],
       "properties": {
         "contentTokens": { "type": "integer" },
         "overheadTokens": { "type": "integer" },
         "inputTokens": { "type": "integer" },
+        "cachedTokens": { "type": "integer" },
         "approximate": { "type": "boolean" },
         "encoding": { "type": "string" },
         "notes": { "type": "array", "items": { "type": "string" } }
@@ -107,9 +110,11 @@
     "CostEstimate": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["inputCostUsd", "pricePerMTok", "pricedAs"],
+      "required": ["inputCostUsd", "uncachedInputCostUsd", "cacheWriteCostUsd", "pricePerMTok", "pricedAs"],
       "properties": {
         "inputCostUsd": { "type": ["number", "null"] },
+        "uncachedInputCostUsd": { "type": ["number", "null"] },
+        "cacheWriteCostUsd": { "type": ["number", "null"] },
         "pricePerMTok": { "type": ["number", "null"] },
         "pricedAs": { "type": ["string", "null"] }
       }
@@ -233,6 +238,44 @@
         }
       }
     },
+    "CacheOpportunity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file", "line", "model", "cacheableTokens", "minCacheableTokens", "savingsPerCallUsd", "sharedWith"],
+      "properties": {
+        "file": { "type": "string" },
+        "line": { "type": "integer" },
+        "model": { "type": "string" },
+        "cacheableTokens": { "type": "integer" },
+        "minCacheableTokens": { "type": "integer" },
+        "savingsPerCallUsd": { "type": ["number", "null"] },
+        "sharedWith": { "type": "array", "items": { "$ref": "#/$defs/SiteRef" } }
+      }
+    },
+    "BelowMinimumSite": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file", "line", "model", "tokens", "minCacheableTokens"],
+      "properties": {
+        "file": { "type": "string" },
+        "line": { "type": "integer" },
+        "model": { "type": "string" },
+        "tokens": { "type": "integer" },
+        "minCacheableTokens": { "type": "integer" }
+      }
+    },
+    "CachingReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["opportunities", "cachedSites", "belowMinimum", "skippedUnknownModel", "totalSavingsPerCallUsd"],
+      "properties": {
+        "opportunities": { "type": "array", "items": { "$ref": "#/$defs/CacheOpportunity" } },
+        "cachedSites": { "type": "integer" },
+        "belowMinimum": { "type": "array", "items": { "$ref": "#/$defs/BelowMinimumSite" } },
+        "skippedUnknownModel": { "type": "integer" },
+        "totalSavingsPerCallUsd": { "type": "number" }
+      }
+    },
     "MonthlyProjectionSite": {
       "type": "object",
       "additionalProperties": false,
@@ -262,7 +305,8 @@
         "discovered", "parsedClean", "parsedPartial", "readErrors", "callSites",
         "modelsResolved", "promptsResolved", "promptsPartial", "promptsUnresolved",
         "inputTokens", "tokensApproximate", "exactDuplicateGroups", "nearDuplicatePairs",
-        "inputCostUsd", "unpricedCallSites", "deadPrompts", "bloatFlags"
+        "inputCostUsd", "unpricedCallSites", "deadPrompts", "bloatFlags",
+        "cachedCallSites", "cacheOpportunities", "cacheSavingsPerCallUsd"
       ],
       "properties": {
         "discovered": { "type": "integer" },
@@ -281,7 +325,10 @@
         "inputCostUsd": { "type": "number" },
         "unpricedCallSites": { "type": "integer" },
         "deadPrompts": { "type": "integer" },
-        "bloatFlags": { "type": "integer" }
+        "bloatFlags": { "type": "integer" },
+        "cachedCallSites": { "type": "integer" },
+        "cacheOpportunities": { "type": "integer" },
+        "cacheSavingsPerCallUsd": { "type": "number" }
       }
     }
   }

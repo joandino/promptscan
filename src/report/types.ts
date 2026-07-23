@@ -53,6 +53,13 @@ export interface PromptPart {
   role: string | null;
   origin: PromptOrigin;
   value: ResolvedValue;
+  /**
+   * True when this part carries an Anthropic `cache_control` breakpoint. Caching
+   * is prefix-based: everything up to and including the LAST marked part is
+   * cached. Tracked at part granularity — a breakpoint on a middle block of a
+   * multi-block part marks the whole part.
+   */
+  cacheControl: boolean;
 }
 
 export interface ResolvedPrompt {
@@ -74,6 +81,12 @@ export interface TokenEstimate {
   overheadTokens: number;
   /** contentTokens + overheadTokens. */
   inputTokens: number;
+  /**
+   * Tokens in the cached prefix — content of every part up to and including the
+   * last one carrying a `cache_control` breakpoint. 0 when the site doesn't
+   * cache. Structural overhead is not counted as cached.
+   */
+  cachedTokens: number;
   /** True when a proxy tokenizer, a fallback encoding, or partial content is involved. */
   approximate: boolean;
   /** Encoding used, e.g. 'o200k_base' or 'cl100k_base (anthropic proxy)'. */
@@ -88,8 +101,20 @@ export interface TokenEstimate {
  * statically knowable.
  */
 export interface CostEstimate {
-  /** Input cost of one call, or null when the model isn't in the pricing table. */
+  /**
+   * EFFECTIVE input cost of one call, or null when the model isn't priced. For a
+   * site using prompt caching this is the steady-state cost — the cached prefix
+   * billed at the cache-read rate — because a cached prefix is written once and
+   * read many times. Equals `uncachedInputCostUsd` when the site doesn't cache.
+   */
   inputCostUsd: number | null;
+  /** What one call would cost with no caching — the baseline for savings. */
+  uncachedInputCostUsd: number | null;
+  /**
+   * Cost of the FIRST call, which pays the 5-minute cache-write premium (1.25x)
+   * on the prefix. Null when unpriced or when the site doesn't cache.
+   */
+  cacheWriteCostUsd: number | null;
   /** Input price per 1M tokens used, or null when unpriced. */
   pricePerMTok: number | null;
   /** Canonical model id the price came from, or null when unpriced. */
@@ -177,6 +202,12 @@ export interface ScanStats {
   deadPrompts: number;
   /** Total context-bloat flags (oversized + few-shot + boilerplate). */
   bloatFlags: number;
+  /** Call sites already using prompt caching. */
+  cachedCallSites: number;
+  /** Uncached Anthropic sites whose prefix is large enough to cache. */
+  cacheOpportunities: number;
+  /** Input cost saved per round of calls if every opportunity is taken. */
+  cacheSavingsPerCallUsd: number;
 }
 
 /** A call-site location, for referencing from duplicate reports. */
@@ -255,6 +286,54 @@ export interface BloatReport {
   thresholds: { largeTokens: number; manyMessages: number; boilerplateMinSites: number };
 }
 
+/**
+ * An Anthropic call site whose static prompt prefix is large enough to cache but
+ * carries no `cache_control` breakpoint. Caching it bills the prefix at the
+ * cache-read rate (0.1x) on every repeat call.
+ */
+export interface CacheOpportunity {
+  file: string;
+  line: number;
+  /** Model these calls use — the per-model minimum depends on it. */
+  model: string;
+  /** Static prompt tokens that would sit in the cached prefix. */
+  cacheableTokens: number;
+  /** Minimum cacheable length for this model; cacheableTokens is at or above it. */
+  minCacheableTokens: number;
+  /** Input cost saved per repeat call once cached, or null when unpriced. */
+  savingsPerCallUsd: number | null;
+  /** Other sites sending this same prompt text — they share one cache entry. */
+  sharedWith: SiteRef[];
+}
+
+/**
+ * A site that would benefit from caching but whose prefix is BELOW its model's
+ * minimum. Reported as a count, never as a recommendation — a breakpoint here
+ * would be silently ignored by the API.
+ */
+export interface BelowMinimumSite {
+  file: string;
+  line: number;
+  model: string;
+  tokens: number;
+  minCacheableTokens: number;
+}
+
+export interface CachingReport {
+  opportunities: CacheOpportunity[];
+  /** Call sites already using `cache_control`. */
+  cachedSites: number;
+  /** Sites large enough to matter but under their model's minimum. */
+  belowMinimum: BelowMinimumSite[];
+  /**
+   * Anthropic sites skipped because the model didn't resolve, so the minimum
+   * cacheable length is unknown. Surfaced so the cap is never silent.
+   */
+  skippedUnknownModel: number;
+  /** Total input cost saved per round of calls if every opportunity is taken. */
+  totalSavingsPerCallUsd: number;
+}
+
 export interface ScanReport {
   /** Absolute path of the scan target. */
   root: string;
@@ -265,6 +344,8 @@ export interface ScanReport {
   deadPrompts: DeadPrompt[];
   /** Context-bloat flags (v1.0, heuristics). */
   bloat: BloatReport;
+  /** Prompt-caching status and savings opportunities (v1.6). */
+  caching: CachingReport;
   /** Monthly cost projection, present only when a volume estimate is supplied. */
   projection: MonthlyProjection | null;
   stats: ScanStats;
