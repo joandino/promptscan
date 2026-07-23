@@ -8,6 +8,10 @@ Find out what your LLM prompts cost before you ship them.
   <img src="https://raw.githubusercontent.com/joandino/promptscan/main/assets/demo.gif" alt="PromptScan scanning a project: call sites with token counts and cost, duplicate prompts, a near-duplicate pair, and a dead prompt constant" width="820">
 </p>
 
+<p align="center">
+  <b><a href="https://joandino.github.io/promptscan/">Try it in your browser →</a></b> &nbsp;·&nbsp; paste a snippet, see the cost — no install, nothing uploaded
+</p>
+
 PromptScan is a command-line tool that reads your codebase, finds every call to an LLM API, and reports the token count and dollar cost of each prompt. Along the way it points out duplicated prompts, prompt constants that nothing references anymore, and context blocks that have quietly grown too large.
 
 It works by static analysis, so there's nothing to instrument and no API key to set up. Run it locally, or drop it into CI to comment on a pull request. The catch is that it only sees what the source makes knowable: when a prompt is assembled at runtime from a database or a request parameter, PromptScan marks it unresolved instead of guessing.

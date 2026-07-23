@@ -1,6 +1,6 @@
 import { Query, type Node, type Tree, type Language } from 'web-tree-sitter';
 import { countTokens } from '../tokens/tokenizer.js';
-import type { LangId } from '../parse/parser.js';
+import type { LangId } from '../parse/lang.js';
 import type { DeadPrompt } from '../report/types.js';
 
 /** A string constant must have at least this many words to look like a prompt. */

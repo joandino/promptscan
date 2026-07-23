@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Tree } from 'web-tree-sitter';
-import { langForExtension, type LangId } from '../parse/parser.js';
+import { langForExtension, type LangId } from '../parse/lang.js';
 import type { SymbolTable } from './symbols.js';
 
 /** A name imported from another module: which module, and its exported name. */

@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PromptScan Playground — what your LLM prompts cost</title>
+    <meta name="description" content="Paste OpenAI / Anthropic / LangChain / litellm code and see the token count and dollar cost of each prompt — statically, in your browser." />
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #0d1117; --panel: #161b22; --border: #30363d; --fg: #c9d1d9;
+        --dim: #8b949e; --accent: #58a6ff; --green: #3fb950; --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      }
+      @media (prefers-color-scheme: light) {
+        :root { --bg: #ffffff; --panel: #f6f8fa; --border: #d0d7de; --fg: #1f2328; --dim: #656d76; --accent: #0969da; --green: #1a7f37; }
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+      header { padding: 22px 24px 8px; }
+      header h1 { margin: 0; font-size: 20px; }
+      header h1 .mark { color: var(--accent); }
+      header p { margin: 6px 0 0; color: var(--dim); max-width: 70ch; }
+      header a { color: var(--accent); text-decoration: none; }
+      .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 12px 24px; border-bottom: 1px solid var(--border); }
+      .bar select, .bar button { font: inherit; background: var(--panel); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px; cursor: pointer; }
+      .bar .ex { color: var(--dim); margin-left: 4px; }
+      main { display: grid; grid-template-columns: 1fr 1fr; gap: 0; min-height: 60vh; }
+      @media (max-width: 820px) { main { grid-template-columns: 1fr; } }
+      #code { width: 100%; height: 100%; min-height: 420px; resize: none; border: 0; border-right: 1px solid var(--border); background: var(--bg); color: var(--fg); font-family: var(--mono); font-size: 13.5px; line-height: 1.55; padding: 16px 20px; tab-size: 4; outline: none; }
+      @media (max-width: 820px) { #code { border-right: 0; border-bottom: 1px solid var(--border); } }
+      #results { padding: 16px 20px; overflow-x: auto; transition: opacity .12s; }
+      #results.busy { opacity: 0.5; }
+      .summary { display: grid; gap: 4px; padding: 12px 14px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; font-family: var(--mono); font-size: 13px; margin-bottom: 14px; }
+      .summary b { color: var(--fg); }
+      table.sites { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 12.5px; }
+      table.sites th, table.sites td { text-align: left; padding: 5px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+      table.sites th { color: var(--dim); font-weight: 600; }
+      table.sites td.num { text-align: right; }
+      table.sites td.loc { color: var(--accent); }
+      .legend { margin: 8px 0 4px; font-family: var(--mono); font-size: 11.5px; }
+      .section { margin-top: 18px; }
+      .section h3 { margin: 0 0 6px; font-size: 13px; }
+      .finding { font-family: var(--mono); font-size: 12.5px; padding: 3px 0; }
+      .dim { color: var(--dim); }
+      .empty, .error { color: var(--dim); font-family: var(--mono); font-size: 13px; padding: 20px 0; }
+      .error { color: #f85149; }
+      footer { padding: 14px 24px 28px; color: var(--dim); font-size: 12.5px; border-top: 1px solid var(--border); }
+      footer a { color: var(--accent); text-decoration: none; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1><span class="mark">PromptScan</span> Playground</h1>
+      <p>
+        Paste OpenAI / Anthropic / LangChain / litellm code and see the token count and dollar cost of each prompt —
+        computed <b>entirely in your browser</b>, nothing uploaded. This is a single-file demo of the
+        <a href="https://github.com/joandino/promptscan">PromptScan CLI</a>; the CLI also scans whole repos,
+        resolves prompts across files, and gates cost regressions in CI.
+      </p>
+    </header>
+
+    <div class="bar">
+      <label>Language
+        <select id="lang">
+          <option value="python">Python</option>
+          <option value="typescript">TypeScript / JavaScript</option>
+          <option value="tsx">TSX / JSX</option>
+        </select>
+      </label>
+      <span class="ex">examples:</span>
+      <button data-example="python">OpenAI (Python)</button>
+      <button data-example="litellm">litellm</button>
+      <button data-example="typescript">OpenAI (TS)</button>
+    </div>
+
+    <main>
+      <textarea id="code" spellcheck="false" placeholder="Paste your LLM call-site code here…"></textarea>
+      <div id="results"><div class="empty">Loading the parser…</div></div>
+    </main>
+
+    <footer>
+      Runs <code>web-tree-sitter</code> (WASM) + <code>js-tiktoken</code> client-side. Anthropic counts use a
+      <code>cl100k</code> proxy and are marked <code>~</code>. Prices are a bundled list-price table — verify before you rely on them.
+      &nbsp;·&nbsp; <a href="https://www.npmjs.com/package/promptscan">npm</a> · <a href="https://github.com/joandino/promptscan">GitHub</a>
+    </footer>
+
+    <script type="module" src="app.js"></script>
+  </body>
+</html>
