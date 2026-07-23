@@ -167,18 +167,18 @@ function renderCallSites(report: ScanReport): string {
   const lines: string[] = [];
 
   if (callSites.length === 0) {
-    lines.push('  Call sites: none detected (OpenAI / Anthropic)');
+    lines.push('  Call sites: none detected (OpenAI / Anthropic / LangChain / litellm)');
     return lines.join('\n');
   }
 
   const openai = callSites.filter((c) => c.provider === 'openai').length;
   const anthropic = callSites.filter((c) => c.provider === 'anthropic').length;
+  const other = callSites.filter((c) => c.provider === 'other').length;
   const unresolvedModels = stats.callSites - stats.modelsResolved;
 
-  lines.push(
-    `  Call sites: ${stats.callSites} ` +
-      `(openai ${openai}, anthropic ${anthropic})`,
-  );
+  const breakdown = [`openai ${openai}`, `anthropic ${anthropic}`];
+  if (other > 0) breakdown.push(`other ${other}`);
+  lines.push(`  Call sites: ${stats.callSites} (${breakdown.join(', ')})`);
   lines.push(
     `  Models:     ${stats.modelsResolved} resolved, ${unresolvedModels} unresolved`,
   );

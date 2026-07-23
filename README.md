@@ -88,10 +88,13 @@ PromptScan parses each file with tree-sitter and looks for the call shapes below
 | OpenAI | `chat.completions.create` / `.parse` / `.stream`, `responses.create` / `.parse` / `.stream` |
 | Anthropic | `messages.create` / `.stream` |
 | LangChain | `ChatOpenAI` / `ChatAnthropic` / `AzureChatOpenAI`, invoked with `.invoke` / `.stream` / `.batch` |
+| litellm (Python) | `litellm.completion` / `.acompletion`, and `from litellm import completion`; the provider is read from the `model=` string |
 
 Matching on the method name alone isn't enough, because `client.messages.create(...)` is also Twilio's SMS API. So a match has to be backed up by something: an SDK import in the file (`import openai`, `import { Anthropic } from "@anthropic-ai/sdk"`, `require("openai")`), or a variable bound to a client constructor (`client = openai.OpenAI()`, `new OpenAI()`). Long chains like `chat.completions.create` are distinctive enough to stand on their own; the short, ambiguous ones need the corroboration or they're dropped. When a call is only reported at medium confidence, the table says why.
 
 LangChain works differently, because there the model and provider come from the constructor (`ChatOpenAI(model="gpt-4o")`) and the actual call is a generic `.invoke()` later on. PromptScan tracks the binding, including through a chain (`chain = prompt | model` in Python, `prompt.pipe(model)` in JS), and only treats `.invoke` as a call site when its receiver is a known model. A string passed straight to `invoke(...)` resolves; a prompt sitting in a `ChatPromptTemplate` is reported as unresolved.
+
+litellm is a router: one `completion(...)` call reaches many providers, and the target is encoded in the `model=` string. PromptScan reads the provider from there — `gpt-4o` and `openai/gpt-4o` are OpenAI, `claude-…` (including Claude hosted behind Bedrock or Vertex) is Anthropic — and tokenizes and prices those normally. A model routed to a backend it can't natively tokenize (`gemini/…`, `cohere/…`) is still reported, as provider `other`, with a rough `cl100k` proxy count and no price rather than a guess. Detection is gated on a litellm import, including the common lazy re-export (`from app.llm import litellm`).
 
 ### Resolving the prompt text
 
@@ -204,6 +207,7 @@ The detection was checked against three real repositories (`openai/openai-python
 - Dead-prompt detection is a heuristic. It can't see runtime reflection, and a prompt a library exports for others to import will look unused. Verify before deleting.
 - A call on an attribute receiver like `self._client.messages.create` in a file that doesn't import the SDK by name won't be detected. In practice this only happens inside a provider's own package.
 - Cross-module constants (`from other import PROMPT`) and non-literal file paths are reported as unresolved rather than guessed.
+- litellm calls to providers other than OpenAI and Anthropic are detected and reported as provider `other`, but their tokens are only a `cl100k` proxy and they carry no price — PromptScan tokenizes and prices OpenAI and Anthropic natively, nothing else. litellm support is Python-only.
 - Prices drift. The pricing table is one bundled file with an as-of date, and the OpenAI figures are list prices. Check them before you rely on the dollar numbers.
 
 ## Building from source

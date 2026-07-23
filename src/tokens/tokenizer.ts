@@ -52,6 +52,9 @@ export function estimateTokens(
   if (provider === 'anthropic') {
     notes.push('anthropic: cl100k_base proxy tokenizer (no public tokenizer) — approximate');
   }
+  if (provider === 'other') {
+    notes.push('litellm backend not natively tokenized: cl100k_base rough proxy — approximate, unpriced');
+  }
   if (prompt.status === 'partial') {
     notes.push('partial prompt: static content only — a floor, not the full size');
   } else if (prompt.status === 'unresolved') {

@@ -125,7 +125,7 @@
         "file": { "type": "string" },
         "line": { "type": "integer" },
         "column": { "type": "integer" },
-        "provider": { "enum": ["openai", "anthropic"] },
+        "provider": { "enum": ["openai", "anthropic", "other"] },
         "method": { "type": "string" },
         "model": { "type": ["string", "null"] },
         "modelResolved": { "type": "boolean" },

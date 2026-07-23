@@ -6,6 +6,8 @@ import {
   emptyModuleContext,
   langChainProvider,
   isLangChainModule,
+  isLiteLLMModule,
+  LITELLM_METHODS,
   type ModuleContext,
   type Provider,
 } from './context.js';
@@ -34,7 +36,16 @@ function collectImports(tree: Tree, language: Language, ctx: ModuleContext): voi
       const moduleName = moduleNode?.text;
       const provider = moduleName ? providerForModule(moduleName) : null;
       const langchain = moduleName ? isLangChainModule(moduleName) : false;
-      if (!provider && !langchain) continue;
+      const litellm = moduleName ? isLiteLLMModule(moduleName) : false;
+      // Re-exported litellm proxy: `from aider.llm import litellm` (a common
+      // lazy-import pattern). The symbol name 'litellm' is unambiguous.
+      const reexportsLitellm = node.namedChildren.some((c) => {
+        if (!c || c === moduleNode) return false;
+        if (c.type === 'dotted_name') return c.text === 'litellm';
+        if (c.type === 'aliased_import') return c.childForFieldName('name')?.text === 'litellm';
+        return false;
+      });
+      if (!provider && !langchain && !litellm && !reexportsLitellm) continue;
       if (provider) ctx.importedProviders.add(provider);
       for (const child of node.namedChildren) {
         if (!child || child === moduleNode) continue;
@@ -50,12 +61,19 @@ function collectImports(tree: Tree, language: Language, ctx: ModuleContext): voi
         if (!orig || !alias) continue;
         if (provider) registerSymbolImport(orig, alias, provider, ctx);
         if (langchain) registerLangChainImport(orig, alias, ctx);
+        // `from litellm import completion, acompletion as x` → bind the local name.
+        if (litellm && LITELLM_METHODS.has(orig)) ctx.litellmFns.set(alias, orig);
+        // `from <anywhere> import litellm [as x]` → bind the module alias.
+        if (orig === 'litellm') ctx.litellmModule = alias;
       }
     }
   }
 }
 
 function registerModuleImport(moduleName: string, localName: string, ctx: ModuleContext): void {
+  // `import litellm` / `import litellm as ll` — record the local module alias so
+  // `litellm.completion(...)` calls can be attributed to litellm.
+  if (isLiteLLMModule(moduleName)) ctx.litellmModule = localName.split('.')[0];
   const provider = providerForModule(moduleName);
   if (!provider) return;
   ctx.importedProviders.add(provider);

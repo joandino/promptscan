@@ -33,10 +33,17 @@ export function resolveEncoding(provider: Provider, model: string | null): Encod
     // matched:true — the proxy is intentional, not a fallback guess.
     return { encoding: 'cl100k_base', matched: true };
   }
+  if (provider === 'other') {
+    // A litellm backend we don't natively tokenize — cl100k as a rough proxy,
+    // matched:false so it surfaces as approximate.
+    return { encoding: 'cl100k_base', matched: false };
+  }
   return model ? encodingForOpenAIModel(model) : { encoding: 'o200k_base', matched: false };
 }
 
-/** Human-readable label for the encoding used, noting the Anthropic proxy. */
+/** Human-readable label for the encoding used, noting proxy tokenizers. */
 export function encodingLabel(provider: Provider, encoding: EncodingName): string {
-  return provider === 'anthropic' ? `${encoding} (anthropic proxy)` : encoding;
+  if (provider === 'anthropic') return `${encoding} (anthropic proxy)`;
+  if (provider === 'other') return `${encoding} (litellm proxy)`;
+  return encoding;
 }
