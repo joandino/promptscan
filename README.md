@@ -93,12 +93,15 @@ PromptScan parses each file with tree-sitter and looks for the call shapes below
 | Anthropic | `messages.create` / `.stream` |
 | LangChain | `ChatOpenAI` / `ChatAnthropic` / `AzureChatOpenAI`, invoked with `.invoke` / `.stream` / `.batch` |
 | litellm (Python) | `litellm.completion` / `.acompletion`, and `from litellm import completion`; the provider is read from the `model=` string |
+| Vercel AI SDK (TS/JS) | `generateText` / `streamText` / `generateObject` / `streamObject` from `ai`; the provider and model come from the `@ai-sdk/*` factory (`openai("gpt-4o")`) |
 
 Matching on the method name alone isn't enough, because `client.messages.create(...)` is also Twilio's SMS API. So a match has to be backed up by something: an SDK import in the file (`import openai`, `import { Anthropic } from "@anthropic-ai/sdk"`, `require("openai")`), or a variable bound to a client constructor (`client = openai.OpenAI()`, `new OpenAI()`). Long chains like `chat.completions.create` are distinctive enough to stand on their own; the short, ambiguous ones need the corroboration or they're dropped. When a call is only reported at medium confidence, the table says why.
 
 LangChain works differently, because there the model and provider come from the constructor (`ChatOpenAI(model="gpt-4o")`) and the actual call is a generic `.invoke()` later on. PromptScan tracks the binding, including through a chain (`chain = prompt | model` in Python, `prompt.pipe(model)` in JS), and only treats `.invoke` as a call site when its receiver is a known model. A string passed straight to `invoke(...)` resolves; a prompt sitting in a `ChatPromptTemplate` is reported as unresolved.
 
 litellm is a router: one `completion(...)` call reaches many providers, and the target is encoded in the `model=` string. PromptScan reads the provider from there — `gpt-4o` and `openai/gpt-4o` are OpenAI, `claude-…` (including Claude hosted behind Bedrock or Vertex) is Anthropic — and tokenizes and prices those normally. A model routed to a backend it can't natively tokenize (`gemini/…`, `cohere/…`) is still reported, as provider `other`, with a rough `cl100k` proxy count and no price rather than a guess. Detection is gated on a litellm import, including the common lazy re-export (`from app.llm import litellm`).
+
+The Vercel AI SDK works the same way in TypeScript: `generateText`/`streamText`/`generateObject`/`streamObject` are called with a `model` produced by a provider factory (`openai("gpt-4o")`, `anthropic("claude-…")`). PromptScan reads the provider and model from that factory — including a `createOpenAI(...)` custom instance or a `const model = openai(...)` bound to a variable — and resolves the `system`, `prompt`, and `messages` arguments. A model from a factory it can't tokenize (`google`, `mistral`, …) is reported as `other`. Detection is gated on the entrypoint being imported from `ai`.
 
 ### Resolving the prompt text
 

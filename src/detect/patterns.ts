@@ -7,7 +7,7 @@ import type { Confidence, MatchBasis } from '../report/types.js';
  * create/parse/stream variants all resolve identically, and across languages.
  * 'langchain' is the invoke(...) argument of a LangChain model/chain.
  */
-export type ArgStyle = 'chat' | 'messages' | 'responses' | 'langchain';
+export type ArgStyle = 'chat' | 'messages' | 'responses' | 'langchain' | 'vercel';
 
 interface MethodPattern {
   suffix: string;
