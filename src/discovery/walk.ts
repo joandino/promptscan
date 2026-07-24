@@ -30,6 +30,37 @@ const DEFAULT_IGNORES = [
 export interface DiscoveryOptions {
   /** Respect .gitignore files under the target. Default true. */
   gitignore?: boolean;
+  /** Extra paths to skip, in .gitignore-style patterns (see `normalizeExcludes`). */
+  exclude?: string[];
+}
+
+const GLOB_CHARS = /[*?[\]{}!]/;
+
+/**
+ * Expand user exclude patterns to globs, following .gitignore conventions so
+ * they behave the way people already expect:
+ *
+ *   `website`        → any directory or file named `website`, at any depth
+ *   `src/generated`  → that path, anchored at the scan root
+ *   `**\/*.test.py`  → passed through untouched (already a glob)
+ *
+ * A bare name matching at any depth is the important case: `--exclude website`
+ * should skip `a/b/website/`, not just a top-level one.
+ */
+export function normalizeExcludes(patterns: string[]): string[] {
+  const out: string[] = [];
+  for (const raw of patterns) {
+    const p = raw.trim().replace(/\/+$/, '');
+    if (!p) continue;
+    if (GLOB_CHARS.test(p)) {
+      out.push(p);
+      continue;
+    }
+    // Anchored when the pattern contains a slash, any-depth when it doesn't.
+    const base = p.includes('/') ? p : `**/${p}`;
+    out.push(base, `${base}/**`);
+  }
+  return out;
 }
 
 /**
@@ -60,7 +91,7 @@ export async function discoverSourceFiles(
   const matches = await globby(SUPPORTED_GLOB, {
     cwd: absTarget,
     absolute: true,
-    ignore: DEFAULT_IGNORES,
+    ignore: [...DEFAULT_IGNORES, ...normalizeExcludes(opts.exclude ?? [])],
     gitignore: opts.gitignore ?? true,
     dot: false,
     followSymbolicLinks: false,

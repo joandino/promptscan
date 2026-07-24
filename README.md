@@ -155,6 +155,14 @@ Thresholds can live in a config file so you don't have to pass them every run. P
 ```yaml
 # promptscan.config.yaml
 gitignore: true
+exclude:                    # paths to skip, .gitignore-style (also --exclude)
+  - website                 # any directory named website, at any depth
+  - src/generated           # contains a slash, so anchored at the scan root
+  - "**/*.bench.py"         # already a glob, used as-is
+limits:                     # absolute thresholds that make a scan exit 1
+  maxTotalCostUsd: 0.50
+  maxPromptTokens: 8000
+  maxTotalTokens: 100000
 duplicates:
   similarity: 0.85          # near-duplicate threshold (also --similarity)
   minWords: 5               # ignore very short prompts in duplicate analysis
@@ -169,6 +177,8 @@ volume:                     # monthly-projection call volumes (same as --volume-
     "src/agents/support.py:44": 50000
 ```
 
+`exclude` follows `.gitignore` conventions, so a bare name matches at any depth (`website` skips `docs/website/` too) while anything containing a slash is anchored at the scan root. Patterns that already look like globs are passed through untouched. Unlike the scalar options, `--exclude` flags are *added to* the config's list rather than replacing it, so passing one on the command line can't silently drop the project's configured excludes. Whatever ends up applying is printed before the report — the filter is never silent.
+
 The volume file for `--volume-config` is the `volume:` block on its own:
 
 ```yaml
@@ -176,6 +186,20 @@ default: 1000
 sites:
   "src/agents/support.py:44": 50000
 ```
+
+## Failing a build on absolute limits
+
+`diff` gates on a *change* between two refs, which needs a base to compare against. For a push, a nightly run, or any build without one, `scan` gates on the absolute state:
+
+```bash
+promptscan scan ./src --max-total-cost 0.50      # exit 1 if the scan's input cost exceeds $0.50
+promptscan scan ./src --max-prompt-tokens 8000   # exit 1 if any one prompt exceeds 8k input tokens
+promptscan scan ./src --max-total-tokens 100000  # exit 1 if the scan's input tokens exceed 100k
+```
+
+Each violation is printed to stderr with the file and line that caused it; the report still goes to stdout, so the exit code gates the build without costing you the output. Exit 1 means a limit was exceeded, exit 2 means bad usage or config.
+
+Because the counts cover statically-resolved content only, they're a floor: a prompt assembled at runtime can be larger than the limit without tripping it. These gates won't fail your build spuriously, but they aren't exhaustive either.
 
 ## Catching cost regressions on a PR
 

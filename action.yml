@@ -37,6 +37,12 @@ inputs:
     description: Whether to post/update a PR comment with the diff.
     required: false
     default: 'true'
+  exclude:
+    description: |
+      Paths to skip, one .gitignore-style pattern per line. Adds to any
+      `exclude:` list in the repository's promptscan config.
+    required: false
+    default: ''
 
 runs:
   using: composite
@@ -50,6 +56,10 @@ runs:
         if [ -n "${{ inputs.fail-on-increase }}" ]; then
           args+=(--fail-on-increase "${{ inputs.fail-on-increase }}")
         fi
+        # One pattern per line; blank lines ignored.
+        while IFS= read -r pattern; do
+          [ -n "$pattern" ] && args+=(--exclude "$pattern")
+        done <<< "${{ inputs.exclude }}"
         set +e
         ${{ inputs.command }} "${args[@]}" > promptscan-diff.md
         echo "exit_code=$?" >> "$GITHUB_OUTPUT"

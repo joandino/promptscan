@@ -2,6 +2,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import type { VolumeConfig } from '../pricing/cost.js';
+import type { ScanLimits } from '../report/limits.js';
 
 /**
  * Project configuration. Every field is optional — the built-in defaults apply
@@ -9,6 +10,10 @@ import type { VolumeConfig } from '../pricing/cost.js';
  */
 export interface PromptScanConfig {
   gitignore?: boolean;
+  /** Extra paths to skip, .gitignore-style. Unions with any --exclude flags. */
+  exclude?: string[];
+  /** Absolute thresholds that make a scan exit non-zero. */
+  limits?: ScanLimits;
   duplicates?: { similarity?: number; minWords?: number };
   bloat?: {
     largeTokens?: number;
@@ -56,6 +61,31 @@ function validate(data: unknown, source: string): PromptScanConfig {
   if (obj.gitignore !== undefined) {
     if (typeof obj.gitignore !== 'boolean') fail('gitignore must be a boolean');
     cfg.gitignore = obj.gitignore;
+  }
+
+  if (obj.exclude !== undefined) {
+    if (!Array.isArray(obj.exclude)) fail('exclude must be a list of path patterns');
+    const patterns: string[] = [];
+    for (const [i, p] of (obj.exclude as unknown[]).entries()) {
+      if (typeof p !== 'string' || p.trim() === '') fail(`exclude[${i}] must be a non-empty string`);
+      patterns.push(p);
+    }
+    cfg.exclude = patterns;
+  }
+
+  if (obj.limits !== undefined) {
+    const l = obj.limits as Record<string, unknown>;
+    if (typeof l !== 'object' || l === null || Array.isArray(l)) fail('limits must be a mapping');
+    cfg.limits = {};
+    if (l.maxTotalCostUsd !== undefined) {
+      cfg.limits.maxTotalCostUsd = num(l.maxTotalCostUsd, 'limits.maxTotalCostUsd', { min: 0 });
+    }
+    if (l.maxPromptTokens !== undefined) {
+      cfg.limits.maxPromptTokens = num(l.maxPromptTokens, 'limits.maxPromptTokens', { min: 0 });
+    }
+    if (l.maxTotalTokens !== undefined) {
+      cfg.limits.maxTotalTokens = num(l.maxTotalTokens, 'limits.maxTotalTokens', { min: 0 });
+    }
   }
 
   if (obj.duplicates !== undefined) {
