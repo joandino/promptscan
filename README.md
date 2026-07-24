@@ -79,7 +79,7 @@ PromptScan v1.0.0  (phase: cost)
       0.94  agent_a.py:4  ~  agent_c.py:4
 ```
 
-The markers in the token/cost columns mean: `~` the number is approximate (Anthropic has no public tokenizer, so it falls back to a proxy), `+` a partial prompt where only the static part could be counted, and `—` a prompt that couldn't be resolved at all.
+The markers in the token/cost columns mean: `~` the number is approximate (Anthropic has no public tokenizer, so it uses a calibrated proxy), `+` a partial prompt where only the static part could be counted, and `—` a prompt that couldn't be resolved at all.
 
 ## What it reports
 
@@ -121,7 +121,20 @@ The unresolved and partial counts are shown up front, not buried, and each unres
 
 ### Tokens and cost
 
-Resolved prompts are tokenized and reported as input tokens, including the small per-message overhead that OpenAI documents. OpenAI uses `js-tiktoken` with the right encoding for the model. Anthropic doesn't publish its tokenizer, so those counts use a `cl100k` proxy and are marked approximate.
+Resolved prompts are tokenized and reported as input tokens, including the small per-message overhead that OpenAI documents. OpenAI uses `js-tiktoken` with the right encoding for the model.
+
+Anthropic doesn't publish a tokenizer — the `@anthropic-ai/tokenizer` package on npm is the Claude 1/2 vocabulary and hasn't been released since 2023 — so those counts use a `cl100k` proxy, calibrated per tokenizer family. Claude Opus 4.7 introduced a tokenizer that produces materially more tokens for the same text, and it's what Opus 4.7/4.8, Sonnet 5, Fable 5, and Mythos use; Opus 4.6 and earlier, the Sonnet 4.x line, and the Haiku line use the previous one. Left uncorrected, a proxy count on a newer-tokenizer model runs about 30% low, and since cost is proportional to tokens, so does the price.
+
+The correction factors were measured against Anthropic's `/v1/messages/count_tokens` endpoint on 2026-07-23, calibrated end to end: nine full prompts per family, spanning instructions, few-shot blocks, JSON schemas, code, policy prose, and multi-turn dialogue, comparing PromptScan's complete estimate against the real count.
+
+| Tokenizer family | Correction | Aggregate error after | Mean absolute error |
+| --- | --- | --- | --- |
+| previous | none | −1.0% | 4.0% |
+| newer | ×1.43 | +0.4% | 4.8% |
+
+Calibrating end to end rather than on raw token ratios changed the answer. Measured on content alone the previous-tokenizer proxy looks about 13% low, which invites a correction — but PromptScan's per-message overhead, borrowed from OpenAI's documented figures, runs slightly high for Anthropic and offsets it almost exactly. Correcting content in isolation would have made those estimates worse. The newer tokenizer's gap is far too large for that to absorb, so it gets a real correction.
+
+Counts stay labeled approximate, because they are: the residual is roughly ±10% per prompt, though it now scatters both directions instead of always running low. A call site whose model doesn't resolve is assumed to be on the newer tokenizer, since that's what every Claude release since Opus 4.7 uses and over-reporting cost is the safer error for a budgeting tool.
 
 Output tokens can't be known from the source, so PromptScan never reports them; the numbers are always input-only. Cost comes from a bundled pricing table stamped with an as-of date. If a model isn't in the table it's reported as unpriced and left out of the totals rather than guessed at. Pass `--volume-config` and it will multiply through to a monthly figure.
 
@@ -275,7 +288,7 @@ Tests are fixture-driven: small Python and TypeScript/JavaScript files under `te
 
 ## Under the hood
 
-The CLI is TypeScript on Node. Parsing goes through `web-tree-sitter` (the WASM build, so it installs cleanly over npx and tolerates broken files) with the Python, TypeScript, and TSX grammars, which lets all three languages share one code path. Tokenization is `js-tiktoken` for OpenAI and a `cl100k` proxy for Anthropic. Similarity is token-set Jaccard, and the terminal tables are `cli-table3`.
+The CLI is TypeScript on Node. Parsing goes through `web-tree-sitter` (the WASM build, so it installs cleanly over npx and tolerates broken files) with the Python, TypeScript, and TSX grammars, which lets all three languages share one code path. Tokenization is `js-tiktoken` for OpenAI and a `cl100k` proxy for Anthropic, calibrated per tokenizer family against the count_tokens endpoint. Similarity is token-set Jaccard, and the terminal tables are `cli-table3`.
 
 ## License
 
