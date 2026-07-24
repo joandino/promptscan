@@ -1,6 +1,12 @@
 import { getEncoding, type Tiktoken } from 'js-tiktoken';
 import type { Provider, ResolvedPrompt, TokenEstimate } from '../report/types.js';
-import { resolveEncoding, encodingLabel, type EncodingName } from './models.js';
+import {
+  resolveEncoding,
+  encodingLabel,
+  anthropicCalibration,
+  anthropicTokenizer,
+  type EncodingName,
+} from './models.js';
 
 /**
  * Documented OpenAI chat overhead: each message costs a few structural tokens,
@@ -46,11 +52,18 @@ export function estimateTokens(
     if (part.cacheControl) lastCached = i;
   });
 
+  // Anthropic has no public tokenizer; cl100k_base is the proxy, scaled by an
+  // empirically measured factor for the model's tokenizer family. Applied to
+  // CONTENT only — that is what the calibration was measured against, with
+  // per-request overhead subtracted out.
+  const calibration = provider === 'anthropic' ? anthropicCalibration(model) : 1;
+  const scale = (n: number): number => (calibration === 1 ? n : Math.round(n * calibration));
+
   let contentTokens = 0;
   let overheadTokens = 0;
   let cachedTokens = 0;
   prompt.parts.forEach((part, i) => {
-    const partTokens = countTokens(part.value.text, encoding);
+    const partTokens = scale(countTokens(part.value.text, encoding));
     contentTokens += partTokens;
     if (i <= lastCached) cachedTokens += partTokens;
     overheadTokens += PER_MESSAGE_TOKENS;
@@ -60,7 +73,13 @@ export function estimateTokens(
 
   const notes: string[] = [];
   if (provider === 'anthropic') {
-    notes.push('anthropic: cl100k_base proxy tokenizer (no public tokenizer) — approximate');
+    const family = anthropicTokenizer(model);
+    notes.push(
+      calibration === 1
+        ? `anthropic: no public tokenizer — cl100k_base proxy (${family} tokenizer, validated against count_tokens; ~±10%)`
+        : `anthropic: no public tokenizer — cl100k_base scaled x${calibration.toFixed(2)} ` +
+          `(${family} tokenizer produces materially more tokens; calibrated against count_tokens; ~±10%)`,
+    );
   }
   if (provider === 'other') {
     notes.push('litellm backend not natively tokenized: cl100k_base rough proxy — approximate, unpriced');
@@ -84,7 +103,7 @@ export function estimateTokens(
     inputTokens: contentTokens + overheadTokens,
     cachedTokens,
     approximate,
-    encoding: encodingLabel(provider, encoding),
+    encoding: encodingLabel(provider, encoding, model),
     notes,
   };
 }

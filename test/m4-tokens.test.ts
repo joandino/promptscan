@@ -51,11 +51,11 @@ test('estimate = content + overhead, with priming and role', () => {
   assert.equal(est.encoding, 'o200k_base');
 });
 
-test('anthropic estimates are flagged approximate with a proxy note', () => {
+test('anthropic estimates are flagged approximate and name the tokenizer family', () => {
   const est = estimateTokens('anthropic', 'claude-sonnet-5', literalPrompt('Hello, world!'));
   assert.equal(est.approximate, true);
-  assert.match(est.encoding, /anthropic proxy/);
-  assert.ok(est.notes.some((n) => /proxy tokenizer/.test(n)));
+  assert.match(est.encoding, /anthropic newer-tokenizer/);
+  assert.ok(est.notes.some((n) => /no public tokenizer/.test(n)));
 });
 
 test('unknown model estimate is approximate and notes the fallback', () => {
