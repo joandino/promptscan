@@ -4,6 +4,7 @@ import { scan, type ScanOptions } from './index.js';
 import { renderScanSummary } from './report/render.js';
 import { loadVolumeConfig } from './pricing/volume.js';
 import { loadConfig, type PromptScanConfig } from './config/config.js';
+import { checkLimits, type ScanLimits } from './report/limits.js';
 import { runDiff } from './diff/run.js';
 import { renderDiffTable, renderDiffMarkdown } from './diff/render.js';
 import { VERSION } from './version.js';
@@ -24,13 +25,28 @@ function explicit(command: Command, name: string): boolean {
   return command.getOptionValueSource(name) === 'cli';
 }
 
+/** Accumulate a repeatable option into a list. */
+function collect(value: string, previous: string[]): string[] {
+  return [...previous, value];
+}
+
+/** Parse a non-negative number for a limit flag, or null when malformed. */
+function parseLimit(value: string): number | null {
+  const n = Number(String(value).replace(/^\$/, ''));
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
 /**
  * Merge config-file values with CLI flags into scan options.
  * Precedence: explicit CLI flag > config file > built-in default (left unset).
+ *
+ * `exclude` is the exception: patterns from the config and the CLI are UNIONED
+ * rather than overridden, so adding one --exclude doesn't silently discard the
+ * project's configured excludes.
  */
 function buildScanOptions(
   command: Command,
-  options: { similarity: string; gitignore: boolean },
+  options: { similarity: string; gitignore: boolean; exclude?: string[] },
   config: PromptScanConfig,
 ): ScanOptions {
   const opts: ScanOptions = {};
@@ -41,10 +57,25 @@ function buildScanOptions(
   if (explicit(command, 'similarity')) opts.threshold = Number(options.similarity);
   else if (config.duplicates?.similarity !== undefined) opts.threshold = config.duplicates.similarity;
 
+  const exclude = [...(config.exclude ?? []), ...(options.exclude ?? [])];
+  if (exclude.length > 0) opts.exclude = exclude;
+
   if (config.duplicates?.minWords !== undefined) opts.minWords = config.duplicates.minWords;
   if (config.bloat) Object.assign(opts, config.bloat);
 
   return opts;
+}
+
+/** Merge limit flags over config limits; an explicit flag wins per-field. */
+function buildLimits(
+  options: { maxTotalCost?: string; maxPromptTokens?: string; maxTotalTokens?: string },
+  config: PromptScanConfig,
+): ScanLimits {
+  const limits: ScanLimits = { ...config.limits };
+  if (options.maxTotalCost !== undefined) limits.maxTotalCostUsd = parseLimit(options.maxTotalCost)!;
+  if (options.maxPromptTokens !== undefined) limits.maxPromptTokens = parseLimit(options.maxPromptTokens)!;
+  if (options.maxTotalTokens !== undefined) limits.maxTotalTokens = parseLimit(options.maxTotalTokens)!;
+  return limits;
 }
 
 program
@@ -56,10 +87,29 @@ program
   .option('--volume-config <file>', 'YAML/JSON call-volume estimate for monthly cost projection')
   .option('--config <file>', 'path to a promptscan config file (else auto-discovered)')
   .option('--no-gitignore', 'do not respect .gitignore files under the target')
+  .option(
+    '--exclude <pattern>',
+    'skip paths matching a .gitignore-style pattern (repeatable; adds to config)',
+    collect,
+    [],
+  )
+  .option('--max-total-cost <usd>', 'exit non-zero if total input cost exceeds this')
+  .option('--max-prompt-tokens <n>', 'exit non-zero if any single prompt exceeds this many input tokens')
+  .option('--max-total-tokens <n>', 'exit non-zero if total input tokens exceed this')
   .action(
     async (
       target: string,
-      options: { format: string; similarity: string; volumeConfig?: string; config?: string; gitignore: boolean },
+      options: {
+        format: string;
+        similarity: string;
+        volumeConfig?: string;
+        config?: string;
+        gitignore: boolean;
+        exclude: string[];
+        maxTotalCost?: string;
+        maxPromptTokens?: string;
+        maxTotalTokens?: string;
+      },
       command: Command,
     ) => {
       if (options.format !== 'table' && options.format !== 'json') {
@@ -71,6 +121,17 @@ program
         console.error(`promptscan: --similarity must be a number in 0..1 (got '${options.similarity}')`);
         process.exitCode = 2;
         return;
+      }
+      for (const [flag, value] of [
+        ['--max-total-cost', options.maxTotalCost],
+        ['--max-prompt-tokens', options.maxPromptTokens],
+        ['--max-total-tokens', options.maxTotalTokens],
+      ] as const) {
+        if (value !== undefined && parseLimit(value) === null) {
+          console.error(`promptscan: ${flag} must be a non-negative number (got '${value}')`);
+          process.exitCode = 2;
+          return;
+        }
       }
 
       let config: PromptScanConfig;
@@ -97,10 +158,24 @@ program
         if (configPath && options.format === 'table') {
           console.error(`promptscan: using config ${configPath}`);
         }
+        // Never filter silently — say what was skipped and where it came from.
+        if (scanOptions.exclude?.length && options.format === 'table') {
+          console.error(`promptscan: excluding ${scanOptions.exclude.map((p) => `'${p}'`).join(', ')}`);
+        }
         if (options.format === 'json') {
           process.stdout.write(JSON.stringify(report, null, 2) + '\n');
         } else {
           process.stdout.write(renderScanSummary(report));
+        }
+
+        const violations = checkLimits(report, buildLimits(options, config));
+        if (violations.length > 0) {
+          for (const v of violations) console.error(`promptscan: ${v.limit} — ${v.message}`);
+          console.error(
+            `promptscan: ${violations.length} limit violation${violations.length === 1 ? '' : 's'} ` +
+              `(counts cover statically-resolved content only, so they are a floor)`,
+          );
+          process.exitCode = 1;
         }
       } catch (err) {
         console.error(`promptscan: ${err instanceof Error ? err.message : String(err)}`);
@@ -121,6 +196,12 @@ program
   .option('--metric <metric>', 'metric for --fail-on-increase: tokens | cost', 'tokens')
   .option('--config <file>', 'path to a promptscan config file (else auto-discovered)')
   .option('--no-gitignore', 'do not respect .gitignore files under the target')
+  .option(
+    '--exclude <pattern>',
+    'skip paths matching a .gitignore-style pattern (repeatable; adds to config)',
+    collect,
+    [],
+  )
   .action(
     async (
       baseRef: string,
@@ -133,6 +214,7 @@ program
         metric: string;
         config?: string;
         gitignore: boolean;
+        exclude: string[];
       },
       command: Command,
     ) => {
